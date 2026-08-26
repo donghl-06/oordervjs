@@ -1,7 +1,7 @@
 <template>
   <Spin :spinning="loading">
     <div class="m-4 overflow-hidden bg-white">
-      <div class="filter-mode" :style="{ marginTop: '5px', marginBottom: '1px' }">
+      <div class="filter-mode security-filter-panel" :style="{ marginTop: '5px', marginBottom: '1px' }">
         <div class="filter-item" style="margin-bottom: 5px">
           <span
             :style="{
@@ -10,14 +10,32 @@
               marginLeft: '1px',
               marginRight: '5px',
             }"
-            >股票号</span
+            >证券类型</span
+          >
+          <Select
+            v-model:value="securityType"
+            style="width: 90px"
+            :options="securityTypeOptions"
+            :allow-clear="false"
+            @change="handleSecurityTypeChange"
+          />
+        </div>
+        <div class="filter-item" style="margin-bottom: 5px">
+          <span
+            :style="{
+              marginTop: '5px',
+              marginBottom: '5px',
+              marginLeft: '10px',
+              marginRight: '5px',
+            }"
+            >证券代码</span
           >
           <Select
             v-model:value="selectSym"
             show-search
-            placeholder="选择股票号"
+            :placeholder="`选择${securityType === 'fund' ? '基金' : '股票'}代码`"
             style="width: 120px"
-            :options="symsData"
+            :options="filteredSymsData"
             :filter-option="symFilterOption"
             @change="selectSymItem"
           />
@@ -122,15 +140,21 @@
   import { Table, Empty, Spin, Radio, Button, Select, Popconfirm  } from 'ant-design-vue';
   import { getTasks, createTask, deleteTask, getSyms, getDates } from '/@/api/orderbook/orderDataGenerate'
   import { useMessage } from '/@/hooks/web/useMessage';
+  import { getSecurityType, securityTypeOptions, toSymbolOption } from '/@/utils/securityType';
 
   const tableData = ref([]);
   const loading = ref(true);
   const defaultWidth = 120;
   const { createMessage } = useMessage();
 
+  const securityType = ref('stock')
   const selectSym = ref('')
   const symsData = ref([])
   const hasSymbol = ref(false)
+
+  const filteredSymsData = computed(() => {
+    return symsData.value.filter((option) => option.securityType === securityType.value);
+  });
 
   const selectDate = ref('')
   const datesData = ref([])
@@ -263,7 +287,16 @@
     return option.value.toLowerCase().indexOf(input.toLowerCase()) >= 0;
   };
 
+  const handleSecurityTypeChange = (type) => {
+    securityType.value = type;
+    selectSym.value = '';
+    hasSymbol.value = false;
+    selectDate.value = '';
+    hasDate.value = false;
+  };
+
   const selectSymItem = async (item) => {
+    securityType.value = getSecurityType(item)
     hasSymbol.value = true
   };
 
@@ -351,10 +384,7 @@
     loading.value = true
     getSyms().then((res) => {
       res.data.forEach(item => {
-          symsData.value.push({
-            value: item,
-            label: item
-          })
+          symsData.value.push(toSymbolOption(item))
         })
     }).catch((err) => {
       console.log(err)
@@ -431,14 +461,50 @@
 </script>
 <style lang="less" scoped>
   .filter-mode {
-    padding: 10px;
-    display: flex;
-    flex-wrap: wrap;
+    padding: 12px 14px;
+    display: grid;
+    grid-template-columns: repeat(6, minmax(130px, 1fr));
+    gap: 10px;
+    align-items: end;
+
     .filter-item {
-      padding: 10px;
+      min-width: 0;
+      padding: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: stretch;
+      gap: 5px;
+
+      :deep(.ant-select) {
+        width: 100% !important;
+      }
+
+      :deep(.ant-btn) {
+        width: 100%;
+      }
+
       .item-name {
         padding: 0 10px;
       }
+    }
+  }
+
+  .security-filter-panel {
+    background: #f5f7fa;
+    border: 1px solid #e1e6ed;
+    border-radius: 6px;
+    box-sizing: border-box;
+  }
+
+  @media (max-width: 1200px) {
+    .filter-mode {
+      grid-template-columns: repeat(3, minmax(150px, 1fr));
+    }
+  }
+
+  @media (max-width: 680px) {
+    .filter-mode {
+      grid-template-columns: minmax(0, 1fr);
     }
   }
   .echart-ul {
