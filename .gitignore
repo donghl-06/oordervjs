@@ -1,4 +1,5 @@
 node_modules
+.pnpm-store
 .DS_Store
 dist
 dist.tar
@@ -29,3 +30,15 @@ pnpm-debug.log*
 *.sln
 *.sw?
 package-lock.json
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+
+# Runtime output
+*.log

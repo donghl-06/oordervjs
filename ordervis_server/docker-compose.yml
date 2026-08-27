@@ -1,0 +1,27 @@
+version: '3.8'
+
+services:
+  ordervis-server:
+    container_name: ordervis-server
+    build: 
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "18080:18080"
+    environment:
+      - aq_username=${aq_username:?set aq_username}
+      - aq_password=${aq_password:?set aq_password}
+    volumes:
+      - ./log:/app/log
+      - ./config:/app/config
+      - ./data:/app/data
+    restart: unless-stopped
+    # 添加资源限制
+    deploy:
+      resources:
+        limits:
+          memory: 32G
+        reservations:
+          memory: 32G
+
+ 
