@@ -3,30 +3,48 @@
     <div class="header-container">
       <div class="header-left">
         <span :style="{ marginLeft: '5px', color: getPriceColor() }">{{ derection }}</span>
-        <!-- 锁定订单统计信息 - 紧跟在derection后面 -->
-        <span v-if="lockedOrderStats" class="stats-inline">
-          <span class="stats-separator">|</span>
-          <span class="stats-label">单前:</span>
-          <span class="stats-value"
-            >{{ lockedOrderStats.beforeVolume }}手 ({{ lockedOrderStats.beforePercent }}%)</span
-          >
-          <span class="stats-label">单后:</span>
-          <span class="stats-value"
-            >{{ lockedOrderStats.afterVolume }}手 ({{ lockedOrderStats.afterPercent }}%)</span
-          >
-          <span class="stats-total">总计: {{ lockedOrderStats.totalVolume }}手</span>
-          <Tooltip
-            v-if="props.showTooltip && props.derection.includes('买一价')"
-            title="单前/单后展示的是第一个锁定订单之前/之后订单的手数总和，总计和百分比不包含第一个锁定订单"
-          >
-            <QuestionCircleOutlined style="margin-left: 4px; color: #1890ff; cursor: pointer" />
-          </Tooltip>
-        </span>
       </div>
       <Button v-if="shouldShowToggleButton" @click="toggleFullscreen" class="icon-button">
         <span v-if="isFullscreen">收起</span>
         <span v-else>展开</span>
       </Button>
+    </div>
+    <div v-if="lockedOrderStats.length" class="stats-panel">
+      <div class="stats-panel-header">
+        <span>当前价位锁定订单统计（{{ lockedOrderStats.length }} 个）</span>
+        <Tooltip
+          v-if="props.showTooltip && props.derection.includes('买一价')"
+          title="每个订单分别统计其前方订单、本订单和后方订单；占比以当前价位队列总量为分母，三项合计 100%"
+        >
+          <QuestionCircleOutlined class="stats-help" />
+        </Tooltip>
+      </div>
+      <div class="stats-grid">
+        <div v-for="stat in lockedOrderStats" :key="stat.lockedOrderId" class="stats-card">
+          <div class="stats-card-header">
+            <span class="stats-order-id">订单ID: {{ stat.lockedOrderId }}</span>
+            <span class="stats-position">队列第 {{ stat.queuePosition }} 位</span>
+          </div>
+          <div class="stats-metrics">
+            <div class="stats-metric">
+              <span>单前</span>
+              <strong>{{ formatVolume(stat.beforeVolume) }}手</strong>
+              <small>{{ stat.beforePercent }}%</small>
+            </div>
+            <div class="stats-metric current">
+              <span>本单</span>
+              <strong>{{ formatVolume(stat.currentVolume) }}手</strong>
+              <small>{{ stat.currentPercent }}%</small>
+            </div>
+            <div class="stats-metric">
+              <span>单后</span>
+              <strong>{{ formatVolume(stat.afterVolume) }}手</strong>
+              <small>{{ stat.afterPercent }}%</small>
+            </div>
+          </div>
+          <div class="stats-total">队列总量：{{ formatVolume(stat.totalVolume) }}手</div>
+        </div>
+      </div>
     </div>
     <div class="table-container">
       <div class="volume-grid" :class="{ fullscreen: isFullscreen }">
@@ -34,6 +52,7 @@
           v-for="(order, index) in ordersData"
           :key="index"
           :title="getOrderTooltip(order)"
+          overlay-class-name="order-tooltip"
           :mouseEnterDelay="0"
           :mouseLeaveDelay="0"
           placement="top"
@@ -148,28 +167,23 @@
   // 判断订单是否应该高亮显示
   const isHighlighted = (order) => {
     if (!order || !order.order_local_id) return false;
-    return props.lockedOrderIds.includes(order.order_local_id);
+    return props.lockedOrderIds.some((lockedId) => String(lockedId) === String(order.order_local_id));
   };
 
   // 获取订单详细信息的提示文本
   const getOrderTooltip = (order) => {
     if (!order || typeof order !== 'object') return '';
 
-    const orderId = order.order_id || '';
-    const orderLocalId = order.order_local_id || '';
-    const direction = order.direction || '';
-    const price = order.price || '';
+    const orderId = order.order_local_id || order.order_id || '';
     const createTime = order.create_time || '';
     const remainingVolume = order.remaining_volume || '';
 
-    if (!orderId && !orderLocalId && !price && !remainingVolume) return '';
+    if (!orderId && !createTime && !remainingVolume) return '';
 
-    const tooltip = [];
-    // if (remainingVolume) tooltip.push(`数量: ${remainingVolume}`);
-    if (orderLocalId) tooltip.push(`订单ID: ${orderLocalId}`);
-    // if (direction) tooltip.push(`方向: ${direction}`);
-    if (price) tooltip.push(`价格: ${price}`);
-    if (createTime) tooltip.push(`创建时间: ${createTime}`);
+    const tooltip = [
+      `订单ID: ${orderId || '暂无数据'}`,
+      `创建时间: ${createTime || '暂无数据'}`,
+    ];
 
     return tooltip.join('\n');
   };
@@ -179,13 +193,23 @@
     return props.derection.includes('买一价') || props.derection.includes('卖一价');
   });
 
-  // 计算属性：统计锁定订单前后的remaining volume
+  const formatVolume = (value) => {
+    const numericValue = Number(value);
+    if (!Number.isFinite(numericValue)) return '0';
+    return numericValue.toLocaleString('zh-CN', { maximumFractionDigits: 2 });
+  };
+
+  const isLockedOrder = (orderId) => {
+    if (orderId === undefined || orderId === null || orderId === '') return false;
+    return props.lockedOrderIds.some((lockedId) => String(lockedId) === String(orderId));
+  };
+
+  // 计算属性：为当前价位的每个锁定订单独立统计队列位置和前后数量
   const lockedOrderStats = computed(() => {
     if (!props.lockedOrderIds || props.lockedOrderIds.length === 0) {
-      return null;
+      return [];
     }
 
-    // 获取所有有效订单（有order_local_id且不为空的订单）
     const validOrders = [];
     if (props.data && typeof props.data === 'object') {
       const row = props.data;
@@ -194,64 +218,55 @@
         const orderLocalId = row[`${colKey}_order_local_id`];
         const remainingVolume = row[colKey];
 
-        // 只统计有订单ID且有数量的有效订单
-        if (orderLocalId && orderLocalId.trim() !== '' && remainingVolume && remainingVolume.toString().trim() !== '') {
+        if (
+          orderLocalId !== undefined &&
+          orderLocalId !== null &&
+          String(orderLocalId).trim() !== '' &&
+          remainingVolume !== undefined &&
+          remainingVolume !== null &&
+          String(remainingVolume).trim() !== ''
+        ) {
           validOrders.push({
             index: i,
-            order_local_id: orderLocalId,
-            remaining_volume: parseFloat(remainingVolume) || 0
+            order_local_id: String(orderLocalId),
+            remaining_volume: parseFloat(remainingVolume) || 0,
           });
         }
       }
     }
 
     if (validOrders.length === 0) {
-      return null;
+      return [];
     }
 
-    // 找到第一个被锁定的订单
-    let firstLockedIndex = -1;
-    for (let i = 0; i < validOrders.length; i++) {
-      if (props.lockedOrderIds.includes(validOrders[i].order_local_id)) {
-        firstLockedIndex = i;
-        break;
-      }
+    const totalVolume = validOrders.reduce((sum, order) => sum + order.remaining_volume, 0);
+    let beforeVolume = 0;
+    validOrders.forEach((order) => {
+      order.beforeVolume = beforeVolume;
+      beforeVolume += order.remaining_volume;
+    });
+
+    let afterVolume = 0;
+    for (let i = validOrders.length - 1; i >= 0; i -= 1) {
+      validOrders[i].afterVolume = afterVolume;
+      afterVolume += validOrders[i].remaining_volume;
     }
 
-    // 如果没有找到锁定的订单，返回null
-    if (firstLockedIndex === -1) {
-      return null;
-    }
+    const percent = (value) => (totalVolume > 0 ? ((value / totalVolume) * 100).toFixed(1) : '0.0');
 
-    // 计算锁定订单前后的remaining volume总和
-    let beforeVolumeSum = 0;
-    let afterVolumeSum = 0;
-
-    // 统计锁定订单前面的volume
-    for (let i = 0; i < firstLockedIndex; i++) {
-      beforeVolumeSum += validOrders[i].remaining_volume;
-    }
-
-    // 统计锁定订单后面的volume
-    for (let i = firstLockedIndex + 1; i < validOrders.length; i++) {
-      afterVolumeSum += validOrders[i].remaining_volume;
-    }
-
-    // 计算总volume（不包含锁定订单本身）
-    const totalVolumeExcludingLocked = beforeVolumeSum + afterVolumeSum;
-
-    // 计算百分比（分母不包含锁定订单）
-    const beforePercent = totalVolumeExcludingLocked > 0 ? ((beforeVolumeSum / totalVolumeExcludingLocked) * 100).toFixed(1) : '0.0';
-    const afterPercent = totalVolumeExcludingLocked > 0 ? ((afterVolumeSum / totalVolumeExcludingLocked) * 100).toFixed(1) : '0.0';
-
-    return {
-      beforeVolume: beforeVolumeSum,
-      afterVolume: afterVolumeSum,
-      beforePercent,
-      afterPercent,
-      totalVolume: totalVolumeExcludingLocked,
-      lockedOrderId: validOrders[firstLockedIndex].order_local_id
-    };
+    return validOrders
+      .filter((order) => isLockedOrder(order.order_local_id))
+      .map((order) => ({
+        lockedOrderId: order.order_local_id,
+        queuePosition: order.index,
+        beforeVolume: order.beforeVolume,
+        currentVolume: order.remaining_volume,
+        afterVolume: order.afterVolume,
+        beforePercent: percent(order.beforeVolume),
+        currentPercent: percent(order.remaining_volume),
+        afterPercent: percent(order.afterVolume),
+        totalVolume,
+      }));
   });
 
   const toggleFullscreen = () => {
@@ -311,34 +326,113 @@
       display: inline-block; /* 确保按钮显示 */
     }
 
-    .stats-inline {
-      margin-left: 10px;
-      font-size: 11px;
-      display: inline-flex;
+    .stats-panel {
+      margin: 4px 0 8px;
+      padding: 6px 8px;
+      border: 1px solid #d9e2ec;
+      border-radius: 5px;
+      background: #f7faff;
+    }
+
+    .stats-panel-header {
+      display: flex;
       align-items: center;
+      margin-bottom: 5px;
+      color: #425466;
+      font-size: 11px;
+      font-weight: 600;
+    }
+
+    .stats-help {
+      margin-left: 5px;
+      color: #1890ff;
+      cursor: pointer;
+    }
+
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
       gap: 6px;
+      max-height: 126px;
+      overflow-y: auto;
+      padding-right: 2px;
+    }
 
-      .stats-separator {
-        color: #ccc;
-        margin: 0 6px;
-      }
+    .stats-card {
+      min-width: 0;
+      padding: 6px 8px;
+      border: 1px solid #e1e6ed;
+      border-radius: 4px;
+      background: #fff;
+    }
 
-      .stats-label {
-        color: #666;
-        font-weight: 500;
-        white-space: nowrap;
-      }
+    .stats-card-header,
+    .stats-total {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      color: #667085;
+      font-size: 11px;
+    }
 
-      .stats-value {
+    .stats-order-id {
+      overflow: hidden;
+      color: #262626;
+      font-weight: 600;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .stats-position {
+      flex-shrink: 0;
+      margin-left: 8px;
+    }
+
+    .stats-metrics {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 4px;
+      margin: 6px 0;
+    }
+
+    .stats-metric {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 3px 2px;
+      border-radius: 3px;
+      background: #f5f7fa;
+      color: #667085;
+      font-size: 10px;
+
+      strong {
+        margin-top: 1px;
         color: #1890ff;
-        font-weight: 600;
-        white-space: nowrap;
+        font-size: 11px;
       }
 
-      .stats-total {
-        color: #52c41a;
-        font-weight: 500;
-        white-space: nowrap;
+      small {
+        color: #98a2b3;
+        font-size: 10px;
+      }
+    }
+
+    .stats-metric.current {
+      background: #e6f7ff;
+
+      strong {
+        color: #096dd9;
+      }
+    }
+
+    .stats-total {
+      justify-content: flex-end;
+      color: #52c41a;
+    }
+
+    @media (max-width: 700px) {
+      .stats-grid {
+        grid-template-columns: minmax(0, 1fr);
       }
     }
     .table-container {
@@ -384,5 +478,22 @@
       background-color: #000000 !important;
       color: #ffffff !important;
     }
+  }
+
+  :deep(.order-tooltip .ant-tooltip-inner) {
+    min-width: 150px;
+    padding: 8px 10px;
+    border: 1px solid rgba(255, 255, 255, 0.28);
+    border-radius: 5px;
+    background: rgba(15, 23, 42, 0.88);
+    box-shadow: 0 4px 12px rgba(15, 23, 42, 0.24);
+    color: #fff;
+    font-size: 12px;
+    line-height: 1.7;
+    white-space: pre-line;
+  }
+
+  :deep(.order-tooltip .ant-tooltip-arrow-content) {
+    background: rgba(15, 23, 42, 0.88);
   }
 </style>

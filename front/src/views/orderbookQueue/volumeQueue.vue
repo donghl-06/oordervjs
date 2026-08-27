@@ -4,15 +4,25 @@
     <div class="main-mode" style="margin-bottom: 40px">
       <div class="data-ul-top">
         <div class="data-li">
-          <div class="filter-mode compact-row">
+          <div class="filter-mode compact-row primary-filter-row">
             <div class="filter-item">
-              <span class="field-label">股票单号</span>
+              <span class="field-label">证券类型</span>
+              <Select
+                v-model:value="securityType"
+                style="width: 90px; margin-left: 11px"
+                :options="securityTypeOptions"
+                :allow-clear="false"
+                @change="handleSecurityTypeChange"
+              />
+            </div>
+            <div class="filter-item">
+              <span class="field-label">证券代码</span>
               <Select
                 v-model:value="selectSym"
                 show-search
-                placeholder="选择股票号"
+                :placeholder="`选择${securityType === 'fund' ? '基金' : '股票'}代码`"
                 style="width: 120px; margin-left: 11px"
-                :options="symsData"
+                :options="filteredSymsData"
                 :filter-option="symFilterOption"
                 @change="selectSymItem"
                 @search="handleSymSearch"
@@ -49,7 +59,7 @@
             </div>
           </div>
 
-          <div class="filter-mode compact-row">
+          <div class="filter-mode compact-row navigation-row">
             <div class="filter-item">
               <span class="field-label">跳转时间</span>
               <Input
@@ -78,7 +88,7 @@
                 </Tooltip> -->
             </div>
           </div>
-          <div class="filter-mode compact-row">
+          <div class="filter-mode compact-row lock-row">
             <div class="filter-item lock-controls">
               <span class="field-label">锁定订单</span>
               <Input
@@ -107,8 +117,8 @@
               <span class="info-label">已锁定: {{ lockedOrderIds.length }}个</span>
             </div>
           </div>
-          <div class="filter-mode compact-row">
-            <span class="section-label">移动时间</span>
+          <div class="filter-mode compact-row movement-row">
+            <span class="section-label">时间快进</span>
             <div class="button-group">
               <Button
                 type="primary"
@@ -140,8 +150,8 @@
               >
             </div>
           </div>
-          <div class="filter-mode compact-row">
-            <span class="section-label">移动时间</span>
+          <div class="filter-mode compact-row movement-row">
+            <span class="section-label">时间回退</span>
             <div class="button-group">
               <Button
                 type="primary"
@@ -173,8 +183,8 @@
               >
             </div>
           </div>
-          <div class="filter-mode compact-row">
-            <span class="section-label">移动订单</span>
+          <div class="filter-mode compact-row movement-row">
+            <span class="section-label">订单快进</span>
             <div class="button-group">
               <Button
                 type="primary"
@@ -206,8 +216,8 @@
               >
             </div>
           </div>
-          <div class="filter-mode compact-row">
-            <span class="section-label">移动订单</span>
+          <div class="filter-mode compact-row movement-row">
+            <span class="section-label">订单回退</span>
             <div class="button-group">
               <Button
                 type="primary"
@@ -369,6 +379,11 @@
     import { useMessage } from '/@/hooks/web/useMessage';
     import { createProgressListener } from '/@/utils/websocket';
     import { useOrderLockStore } from '/@/store/orderLock';
+    import {
+      getSecurityType,
+      securityTypeOptions,
+      toSymbolOption,
+    } from '/@/utils/securityType';
     import { 
       validateOrderLockData, 
       withOrderLockErrorHandling, 
@@ -393,9 +408,14 @@
     // 存储API返回的snapshot_id
     const snapshotId = ref(0);
 
+    const securityType = ref(localStorage.getItem('volumeQueue_securityType') || 'stock');
     const selectSym = ref('');
     const symsData = ref([]);
     const hasSymbol = ref(false);
+
+    const filteredSymsData = computed(() => {
+      return symsData.value.filter((option) => option.securityType === securityType.value);
+    });
 
     const selectDate = ref('');
     const datesData = ref([]);
@@ -486,11 +506,13 @@
             // 第一步：设置股票代码和日期（如果提供）
             if (lockSym && lockDate) {
               console.log('📝 [VolumeQueue] 步骤1: 设置股票代码和日期');
+              securityType.value = getSecurityType(lockSym);
               selectSym.value = lockSym;
               selectDate.value = lockDate;
               hasSymbol.value = true;
               hasDate.value = true;
               localStorage.setItem('volumeQueue_selectSym', lockSym);
+              localStorage.setItem('volumeQueue_securityType', securityType.value);
               localStorage.setItem('volumeQueue_selectDate', lockDate);
               console.log('   ✓ 股票代码已设置:', selectSym.value);
               console.log('   ✓ 交易日期已设置:', selectDate.value);
@@ -693,6 +715,7 @@
         const savedTime = localStorage.getItem('volumeQueue_timestamp');
         
         if (savedSym) {
+          securityType.value = localStorage.getItem('volumeQueue_securityType') || getSecurityType(savedSym);
           selectSym.value = savedSym;
           hasSymbol.value = true;
           console.log('恢复股票代码:', savedSym);
@@ -1200,12 +1223,31 @@
       return Object.keys(volumeData.value).length === 0;
     });
 
+    const handleSecurityTypeChange = (type) => {
+      securityType.value = type;
+      localStorage.setItem('volumeQueue_securityType', type);
+
+      // 类型切换后清空旧代码及其关联日期，避免股票代码和基金代码混用。
+      selectSym.value = '';
+      hasSymbol.value = false;
+      selectDate.value = '';
+      datesData.value = [];
+      hasDate.value = false;
+      volumeData.value = {};
+      isETF.value = type === 'fund';
+      localStorage.removeItem('volumeQueue_selectSym');
+      localStorage.removeItem('volumeQueue_selectDate');
+      localStorage.removeItem('volumeQueue_timestamp');
+    };
+
     const symFilterOption = (input, option) => {
       return option.value.toLowerCase().indexOf(input.toLowerCase()) >= 0;
     };
 
     const selectSymItem = (item) => {
       selectSym.value = item
+      securityType.value = getSecurityType(item)
+      localStorage.setItem('volumeQueue_securityType', securityType.value)
       localStorage.setItem('volumeQueue_selectSym', item)
       hasSymbol.value = true
       loading.value = true
@@ -1291,13 +1333,13 @@
           const currentValue = searchInput.trim();
 
           // 先查找完全匹配的选项
-          let matchingOption = symsData.value.find(option =>
+          let matchingOption = filteredSymsData.value.find(option =>
             option.value.toLowerCase() === currentValue.toLowerCase()
           );
 
           // 如果没有完全匹配，查找包含输入内容的选项
           if (!matchingOption) {
-            matchingOption = symsData.value.find(option =>
+            matchingOption = filteredSymsData.value.find(option =>
               option.value.toLowerCase().includes(currentValue.toLowerCase())
             );
           }
@@ -1313,7 +1355,7 @@
             selectSym.value = '';
             symSearchValue.value = '';
             symLastValidInput.value = '';
-            createMessage.warning(`未找到匹配的股票代码: ${currentValue}`);
+            createMessage.warning(`未找到匹配的${securityType.value === 'fund' ? '基金' : '股票'}代码: ${currentValue}`);
           }
         }
 
@@ -1439,7 +1481,7 @@
           const levels = snapshot.levels || {};
 
           // 转换orders数组为表格数据格式的函数
-          const transformOrdersToTableData = (orders) => {
+          const transformOrdersToTableData = (orders, levelPrice) => {
             if (!orders || orders.length === 0) {
               return { orders: [], data: [[], []] };
             }
@@ -1455,7 +1497,7 @@
               row[`${colKey}_order_id`] = order.order_id || '';
               row[`${colKey}_order_local_id`] = order.order_local_id || '';
               row[`${colKey}_direction`] = order.direction || '';
-              row[`${colKey}_price`] = order.price || '';
+              row[`${colKey}_price`] = levelPrice || order.price || '';
               row[`${colKey}_create_time`] = order.create_time || '';
             });
 
@@ -1470,17 +1512,17 @@
           volumeData.value = {
             datetime: res.data.time || '',
             is_ETF: isETF.value,
-            ask1: transformOrdersToTableData(levels.ask1?.orders || []),
+            ask1: transformOrdersToTableData(levels.ask1?.orders || [], levels.ask1?.price),
             ask1_price: levels.ask1?.price || 0,
-            ask2: transformOrdersToTableData(levels.ask2?.orders || []),
+            ask2: transformOrdersToTableData(levels.ask2?.orders || [], levels.ask2?.price),
             ask2_price: levels.ask2?.price || 0,
-            ask3: transformOrdersToTableData(levels.ask3?.orders || []),
+            ask3: transformOrdersToTableData(levels.ask3?.orders || [], levels.ask3?.price),
             ask3_price: levels.ask3?.price || 0,
-            bid1: transformOrdersToTableData(levels.bid1?.orders || []),
+            bid1: transformOrdersToTableData(levels.bid1?.orders || [], levels.bid1?.price),
             bid1_price: levels.bid1?.price || 0,
-            bid2: transformOrdersToTableData(levels.bid2?.orders || []),
+            bid2: transformOrdersToTableData(levels.bid2?.orders || [], levels.bid2?.price),
             bid2_price: levels.bid2?.price || 0,
-            bid3: transformOrdersToTableData(levels.bid3?.orders || []),
+            bid3: transformOrdersToTableData(levels.bid3?.orders || [], levels.bid3?.price),
             bid3_price: levels.bid3?.price || 0
           };
 
@@ -1722,7 +1764,7 @@
         if (res.code == 0) {
           symsData.value = []
           res.data.forEach(item => {
-            symsData.value.push({value: item, label: item})
+            symsData.value.push(toSymbolOption(item))
           })
           if (res.message) {
             createMessage.success(res.message)
@@ -1872,7 +1914,7 @@
       const levels = snapshot.levels || {};
 
       // 转换orders数组为表格数据格式的函数
-      const transformOrdersToTableData = (orders) => {
+      const transformOrdersToTableData = (orders, levelPrice) => {
         if (!orders || orders.length === 0) {
           return { orders: [], data: [[], []] };
         }
@@ -1884,7 +1926,7 @@
           row[`${colKey}_order_id`] = order.order_id || '';
           row[`${colKey}_order_local_id`] = order.order_local_id || '';
           row[`${colKey}_direction`] = order.direction || '';
-          row[`${colKey}_price`] = order.price || '';
+          row[`${colKey}_price`] = levelPrice || order.price || '';
           row[`${colKey}_create_time`] = order.create_time || '';
         });
 
@@ -1898,17 +1940,17 @@
       volumeData.value = {
         datetime: snapshot.timestamp || responseData.time || '',
         is_ETF: responseData.is_ETF !== undefined ? responseData.is_ETF : isETF.value,
-        ask1: transformOrdersToTableData(levels.ask1?.orders || []),
+        ask1: transformOrdersToTableData(levels.ask1?.orders || [], levels.ask1?.price),
         ask1_price: levels.ask1?.price || 0,
-        ask2: transformOrdersToTableData(levels.ask2?.orders || []),
+        ask2: transformOrdersToTableData(levels.ask2?.orders || [], levels.ask2?.price),
         ask2_price: levels.ask2?.price || 0,
-        ask3: transformOrdersToTableData(levels.ask3?.orders || []),
+        ask3: transformOrdersToTableData(levels.ask3?.orders || [], levels.ask3?.price),
         ask3_price: levels.ask3?.price || 0,
-        bid1: transformOrdersToTableData(levels.bid1?.orders || []),
+        bid1: transformOrdersToTableData(levels.bid1?.orders || [], levels.bid1?.price),
         bid1_price: levels.bid1?.price || 0,
-        bid2: transformOrdersToTableData(levels.bid2?.orders || []),
+        bid2: transformOrdersToTableData(levels.bid2?.orders || [], levels.bid2?.price),
         bid2_price: levels.bid2?.price || 0,
-        bid3: transformOrdersToTableData(levels.bid3?.orders || []),
+        bid3: transformOrdersToTableData(levels.bid3?.orders || [], levels.bid3?.price),
         bid3_price: levels.bid3?.price || 0
       };
 
@@ -1976,7 +2018,7 @@
           const levels = snapshot.levels || {};
 
           // 转换orders数组为表格数据格式的函数（与processVolumeData中的函数相同）
-          const transformOrdersToTableData = (orders) => {
+          const transformOrdersToTableData = (orders, levelPrice) => {
             if (!orders || orders.length === 0) {
               return { orders: [], data: [[], []] };
             }
@@ -1992,7 +2034,7 @@
               row[`${colKey}_order_id`] = order.order_id || '';
               row[`${colKey}_order_local_id`] = order.order_local_id || '';
               row[`${colKey}_direction`] = order.direction || '';
-              row[`${colKey}_price`] = order.price || '';
+              row[`${colKey}_price`] = levelPrice || order.price || '';
               row[`${colKey}_create_time`] = order.create_time || '';
             });
 
@@ -2007,17 +2049,17 @@
           volumeData.value = {
             datetime: snapshot.timestamp || res.data.time || '',
             is_ETF: res.data.is_ETF !== undefined ? res.data.is_ETF : isETF.value,
-            ask1: transformOrdersToTableData(levels.ask1?.orders || []),
+            ask1: transformOrdersToTableData(levels.ask1?.orders || [], levels.ask1?.price),
             ask1_price: levels.ask1?.price || 0,
-            ask2: transformOrdersToTableData(levels.ask2?.orders || []),
+            ask2: transformOrdersToTableData(levels.ask2?.orders || [], levels.ask2?.price),
             ask2_price: levels.ask2?.price || 0,
-            ask3: transformOrdersToTableData(levels.ask3?.orders || []),
+            ask3: transformOrdersToTableData(levels.ask3?.orders || [], levels.ask3?.price),
             ask3_price: levels.ask3?.price || 0,
-            bid1: transformOrdersToTableData(levels.bid1?.orders || []),
+            bid1: transformOrdersToTableData(levels.bid1?.orders || [], levels.bid1?.price),
             bid1_price: levels.bid1?.price || 0,
-            bid2: transformOrdersToTableData(levels.bid2?.orders || []),
+            bid2: transformOrdersToTableData(levels.bid2?.orders || [], levels.bid2?.price),
             bid2_price: levels.bid2?.price || 0,
-            bid3: transformOrdersToTableData(levels.bid3?.orders || []),
+            bid3: transformOrdersToTableData(levels.bid3?.orders || [], levels.bid3?.price),
             bid3_price: levels.bid3?.price || 0
           };
 
@@ -3159,10 +3201,12 @@
         updateLockProgressNotification();
         
         selectSym.value = lockData.sym;
+        securityType.value = getSecurityType(lockData.sym);
         selectDate.value = lockData.date;
         hasSymbol.value = true;
         hasDate.value = true;
         localStorage.setItem('volumeQueue_selectSym', lockData.sym);
+        localStorage.setItem('volumeQueue_securityType', securityType.value);
         localStorage.setItem('volumeQueue_selectDate', lockData.date);
         
         await new Promise(resolve => setTimeout(resolve, 300));
@@ -3413,15 +3457,15 @@
 </script>
 <style lang="less" scoped>
   .filter-mode {
-    padding: 3px 8px;
+    padding: 4px 8px;
     display: flex;
     flex-wrap: wrap;
     align-items: center;
-    min-height: 32px;
+    min-height: 34px;
 
     &.compact-row {
-      padding: 2px 8px;
-      margin-bottom: 2px;
+      padding: 3px 8px;
+      margin-bottom: 3px;
     }
 
     .filter-item {
@@ -3430,6 +3474,7 @@
       margin-bottom: 0px;
       display: flex;
       align-items: center;
+      min-width: 0;
 
       &.info-item {
         margin-right: 15px;
@@ -3446,6 +3491,8 @@
         display: flex;
         align-items: center;
         gap: 0;
+        flex-wrap: wrap;
+        row-gap: 6px;
 
         .field-label {
           margin-right: 8px;
@@ -3475,23 +3522,84 @@
       font-size: 13px;
       font-weight: 500;
       white-space: nowrap;
-      min-width: 60px;
+      min-width: 68px;
     }
 
     .button-group {
       display: flex;
-      gap: 4px;
+      gap: 6px;
       flex-wrap: wrap;
     }
 
     .time-btn,
     .order-btn {
-      width: 85px;
-      height: 28px;
+      width: 78px;
+      height: 27px;
       font-size: 12px;
-      padding: 0 8px;
+      padding: 0 5px;
     }
   }
+
+  .primary-filter-row {
+    display: grid;
+    grid-template-columns: minmax(150px, 1fr) minmax(180px, 1.35fr) minmax(180px, 1.2fr) auto;
+    gap: 8px;
+    padding-top: 2px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid #e1e6ed;
+
+    .filter-item {
+      margin-right: 0;
+      min-width: 0;
+    }
+
+    :deep(.ant-select) {
+      width: 100% !important;
+      margin-left: 0 !important;
+    }
+
+    :deep(.ant-btn) {
+      min-width: 64px;
+    }
+  }
+
+  .navigation-row,
+  .lock-row {
+    padding-top: 8px;
+    padding-bottom: 4px;
+  }
+
+  .navigation-row {
+    justify-content: space-between;
+
+    .filter-item {
+      margin-right: 0;
+    }
+  }
+
+  .lock-row {
+    border-bottom: 1px solid #e1e6ed;
+    padding-bottom: 8px;
+
+    .lock-controls {
+      width: 100%;
+      margin-right: 0;
+    }
+
+    :deep(.ant-input) {
+      max-width: 150px;
+    }
+  }
+
+  .movement-row {
+    padding-top: 4px;
+    padding-bottom: 2px;
+
+    .button-group {
+      flex: 1;
+    }
+  }
+
   .echart-ul {
     display: flex;
     align-items: center;
@@ -3516,34 +3624,42 @@
       }
     }
     .data-ul-top {
-      display: flex;
-      justify-content: flex-start;
+      display: grid;
+      grid-template-columns: minmax(620px, 3fr) minmax(280px, 2fr) minmax(360px, 4fr);
+      gap: 8px;
       width: 100%;
-      height: 220px;
-      align-items: flex-start;
+      min-height: 280px;
+      height: auto;
+      align-items: stretch;
       .data-li:nth-child(1) {
-        flex: 3;
-        margin-top: 3px;
-        margin-right: 5px;
-        background: #e9e7e7;
-        min-width: 530px; /* 添加最小宽度 */
-        padding: 5px;
+        min-width: 0;
+        margin: 0;
+        padding: 10px 12px;
+        background: #f5f7fa;
+        border: 1px solid #e1e6ed;
+        border-radius: 6px;
+        box-sizing: border-box;
       }
 
       .data-li:nth-child(2) {
-        flex: 2;
-        margin-top: 5px;
-        margin-right: 5px;
-        background: #e9e7e7;
+        min-width: 0;
+        margin: 0;
+        background: #f5f7fa;
+        border: 1px solid #e1e6ed;
+        border-radius: 6px;
+        overflow: hidden;
       }
 
       .data-li:nth-child(3) {
-        flex: 4;
-        margin-top: 5px;
-        margin-right: 5px;
-        background: #e9e7e7;
+        min-width: 0;
+        margin: 0;
+        background: #f5f7fa;
+        border: 1px solid #e1e6ed;
+        border-radius: 6px;
+        overflow: hidden;
       }
     }
+
     .empty-mode {
       height: calc(100vh - 300px);
       display: flex;
@@ -3551,6 +3667,37 @@
       justify-content: center;
     }
   }
+
+  @media (max-width: 1280px) {
+    .main-mode .data-ul-top {
+      grid-template-columns: minmax(560px, 3fr) minmax(260px, 2fr);
+
+      .data-li:nth-child(3) {
+        grid-column: 1 / -1;
+      }
+    }
+  }
+
+  @media (max-width: 900px) {
+    .main-mode .data-ul-top {
+      grid-template-columns: minmax(0, 1fr);
+
+      .data-li:nth-child(3) {
+        grid-column: auto;
+      }
+    }
+  }
+
+  @media (max-width: 760px) {
+    .primary-filter-row {
+      grid-template-columns: 1fr 1fr;
+    }
+
+    .primary-filter-row .filter-item:last-child {
+      justify-content: flex-start;
+    }
+  }
+
   .dropdown-list {
     max-height: 200px; /* 设置一个合适的最大高度 */
     overflow-y: auto; /* 当内容超过最大高度时显示滚动条 */
