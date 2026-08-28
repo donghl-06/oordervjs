@@ -237,3 +237,79 @@ export async function findOrder(params: FindOrderParams) {
     throw error;
   }
 }
+
+/**
+ * 获取相邻变化快照（A2）：指定时间之后(direction=1)或之前(-1)第一个有变化的快照
+ * 替代 moveTimes 的串行轮询
+ */
+export async function getNextChange(params: {
+  sym: string;
+  date: string;
+  time: string;
+  direction?: number;
+}) {
+  try {
+    const response = await defHttp.get(
+      {
+        url: '/tradebook/next_change',
+        params: params,
+      },
+      {
+        joinTime: false,
+      },
+    );
+    return processApiData(response.data);
+  } catch (error) {
+    console.error('Error fetching next change:', error);
+    throw error;
+  }
+}
+
+/**
+ * 获取时间窗口内买一/卖一流量序列（C2 图表数据）
+ * 每桶字段：bid_create/bid_cancel/bid_traded/ask_create/ask_cancel/ask_traded
+ */
+export async function getTradeFlowSeries(params: {
+  sym: string;
+  date: string;
+  time: string;
+  window_ms: number;
+  points?: number;
+}) {
+  try {
+    const response = await defHttp.get(
+      {
+        url: '/tradebook/trade_flow_series',
+        params: params,
+      },
+      {
+        joinTime: false,
+      },
+    );
+    return processApiData(response.data);
+  } catch (error) {
+    console.error('Error fetching trade flow series:', error);
+    throw error;
+  }
+}
+
+/**
+ * 获取订单生命周期（B4）
+ * order_id 为快照订单的 order_local_id（即 csord 的 orderid）
+ */
+export async function getOrderLifecycle(params: {
+  sym: string;
+  date: string;
+  order_id: number | string;
+}) {
+  try {
+    const response = await defHttp.get({
+      url: '/tradebook/order_lifecycle',
+      params: params,
+    });
+    return processApiData(response.data);
+  } catch (error) {
+    console.error('Error fetching order lifecycle:', error);
+    throw error;
+  }
+}

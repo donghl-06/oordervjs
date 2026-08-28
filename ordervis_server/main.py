@@ -3,13 +3,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse
 # from fastapi.websockets import WebSocket
-from ordervis.ordervis_server.routers import auth, progress, tradebook
+from ordervis_server.routers import auth, progress, tradebook
 import uvicorn
 import os
-from ordervis.ordervis_server.package import backend_logger
-from ordervis.ordervis_server.routers import websocket
+from ordervis_server.package import backend_logger
+from ordervis_server.routers import websocket
 import logging
-from ordervis.ordervis_server.utils.adata_session import ensure_adata_session
+from ordervis_server.utils.adata_session import ensure_adata_session
 
 # 配置日志
 logger = backend_logger.Log("ordervis")
@@ -93,7 +93,7 @@ if __name__ == "__main__":
     os.environ["PYDEVD_USE_FRAME_EVAL"] = "NO"
         
     uvicorn.run(
-        "main:app",
+        "ordervis_server.main:app",
         host="0.0.0.0",
         port=18080,
         reload=True,

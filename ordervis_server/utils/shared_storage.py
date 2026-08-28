@@ -14,7 +14,7 @@ from typing import Dict, Optional, List
 from .tradebook import TradeBook
 from .adata_session import ensure_adata_session_or_raise
 from .progress_manager import progress_manager, create_progress_callback
-from ordervis.ordervis_server.package import backend_logger
+from ordervis_server.package import backend_logger
 import lib.sh_revert_module as sh_revert_module
 import pandas as pd
 
@@ -55,7 +55,7 @@ class SharedTradeBookStorage:
             return
         
         try:
-            from ordervis.ordervis_server.utils.utils import get_data_sqlserver
+            from ordervis_server.utils.utils import get_data_sqlserver
             current_date = datetime.now().strftime("%Y%m%d")
             
             stock_sql = f"""
@@ -92,6 +92,15 @@ class SharedTradeBookStorage:
         in_stock = symbol in self._stock_codes
         self.logger.n_log(f"[DEBUG] _is_etf('{symbol}') = {result}, 股票列表包含: {in_stock}", self.log_level.DEBUG)
         return result
+
+    def classify_symbol(self, symbol: str) -> str:
+        """返回证券类型: 'fund' / 'stock' / 'unknown'"""
+        self._load_symbol_codes()
+        if symbol in self._fund_codes:
+            return 'fund'
+        if symbol in self._stock_codes:
+            return 'stock'
+        return 'unknown'
 
     def _get_data_db(self, symbol: str, date: str) -> None:
         # NOTE: 拉数前确保 adata 令牌有效（含 refresh 失败后的重新登录），避免仅依赖启动时 login 一次

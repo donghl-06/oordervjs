@@ -7,8 +7,8 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Header, Request
 from pydantic import BaseModel
 from typing import Optional, List
-from ordervis.ordervis_server.utils.auth import get_current_user, verify_token_only
-from ordervis.ordervis_server.package import backend_logger
+from ordervis_server.utils.auth import get_current_user, verify_token_only
+from ordervis_server.package import backend_logger
 
 router = APIRouter(tags=["认证"])
 

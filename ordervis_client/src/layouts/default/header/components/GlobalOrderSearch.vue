@@ -31,11 +31,11 @@
       </Button>
     </template>
     <div class="global-order-search-form">
-      <!-- 显示从volumeQueue页面读取的股票代码和日期 -->
+      <!-- 显示从volumeQueue页面读取的证券代码和日期 -->
       <div class="fixed-values-display">
         <div class="value-item">
-          <span class="value-label">股票代码:</span>
-          <span class="value-content">{{ form.sym || '请在主界面选择股票单号' }}</span>
+          <span class="value-label">{{ securityLabel }}代码:</span>
+          <span class="value-content">{{ form.sym || '请在主界面选择证券代码' }}</span>
         </div>
         <div class="value-item">
           <span class="value-label">交易日期:</span>
@@ -58,12 +58,12 @@
 
         <div class="form-field">
           <label class="field-label">订单价格</label>
-          <InputNumber 
-            v-model:value="form.order_price" 
+          <InputNumber
+            v-model:value="form.order_price"
             class="field-input"
-            :precision="2"
-            :step="0.01"
-            placeholder="订单价格"
+            :precision="pricePrecision"
+            :step="priceStep"
+            :placeholder="`订单价格（${securityLabel}，${pricePrecision}位小数）`"
           />
         </div>
 
@@ -123,7 +123,7 @@
             </div>
             <div class="detail-row">
               <span class="detail-label">价格:</span>
-              <span class="detail-value">{{ searchResult.price }}</span>
+              <span class="detail-value">{{ formatPrice(searchResult.price) }}</span>
             </div>
             <div class="detail-row">
               <span class="detail-label">数量:</span>
@@ -144,7 +144,7 @@
               <span class="detail-label">查询条件:</span>
             </div>
             <div class="detail-row">
-              <span class="detail-label">  - 股票代码:</span>
+              <span class="detail-label">  - {{ securityLabel }}代码:</span>
               <span class="detail-value">{{ form.sym }}</span>
             </div>
             <div class="detail-row">
@@ -183,11 +183,12 @@
 </template>
 
 <script lang="ts">
-  import { defineComponent, reactive, ref, onUnmounted, nextTick } from 'vue';
+  import { defineComponent, reactive, ref, computed, onUnmounted, nextTick } from 'vue';
   import { Tooltip, Input, InputNumber, Radio, RadioGroup, Button, Divider } from 'ant-design-vue';
   import { SearchOutlined } from '@ant-design/icons-vue';
   import { BasicModal } from '/@/components/Modal';
   import { findOrder, type FindOrderParams } from '/@/api/orderbook/orderbook';
+  import { getSecurityType } from '/@/utils/securityType';
   import { useI18n } from '/@/hooks/web/useI18n';
   import { useRouter } from 'vue-router';
   import { useOrderLockStore } from '/@/store/orderLock';
@@ -240,8 +241,22 @@
         form.sym = localStorage.getItem('volumeQueue_selectSym') || '';
         form.date = localStorage.getItem('volumeQueue_selectDate') || '';
       };
-      
+
       loadSavedValues();
+
+      // 证券类型相关：价格精度（股票2位/基金3位）与文案
+      const currentSecurityType = computed(() => {
+        const saved = localStorage.getItem('volumeQueue_securityType');
+        if (saved === 'fund' || saved === 'stock') return saved;
+        return form.sym ? getSecurityType(form.sym) : 'stock';
+      });
+      const securityLabel = computed(() => (currentSecurityType.value === 'fund' ? '基金' : '股票'));
+      const pricePrecision = computed(() => (currentSecurityType.value === 'fund' ? 3 : 2));
+      const priceStep = computed(() => (currentSecurityType.value === 'fund' ? 0.001 : 0.01));
+      const formatPrice = (price?: number) => {
+        if (price === undefined || price === null) return '';
+        return Number(price).toFixed(pricePrecision.value);
+      };
 
       
 
@@ -531,6 +546,10 @@
         loading,
         form,
         searchResult,
+        securityLabel,
+        pricePrecision,
+        priceStep,
+        formatPrice,
         handleTimeInputChange,
         handleTimeBlur,
         openModal,

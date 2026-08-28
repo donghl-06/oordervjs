@@ -12,7 +12,7 @@ import threading
 import adata
 from aauth.client import AAuthClient
 
-from ordervis.ordervis_server.package import backend_logger
+from ordervis_server.package import backend_logger
 
 _adata_session_lock = threading.Lock()
 _logger = backend_logger.Log("adata_session")

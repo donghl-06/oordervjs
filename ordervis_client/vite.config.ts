@@ -60,7 +60,7 @@ export default ({ command, mode }: ConfigEnv): UserConfig => {
       proxy: {
         ...createProxy(VITE_PROXY),
         '/ws': {
-          target: 'http://10.1.228.10:18080',
+          target: 'http://127.0.0.1:18080',
           changeOrigin: true,
           ws: true,
         },

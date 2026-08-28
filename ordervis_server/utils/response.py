@@ -1,7 +1,7 @@
 from fastapi.responses import JSONResponse
 from typing import Any, Dict, List, Optional
-from ordervis.ordervis_server.config.exception import StatusCodeUnregisteredException, ResponseEntityUnsupportException
-from ordervis.ordervis_server.config.response import status_code_map
+from ordervis_server.config.exception import StatusCodeUnregisteredException, ResponseEntityUnsupportException
+from ordervis_server.config.response import status_code_map
 
 
 def response_format(msg: str, response_code: int, data_entity: Any = [], length: int = -1, headers: Dict = {}):

@@ -99,75 +99,58 @@
 
   const emit = defineEmits(['update-fullscreen']);
 
+  // 锁定订单 ID 集合（Set 查询 O(1)，替代数组线性 some）
+  const lockedIdSet = computed(() => {
+    const ids = props.lockedOrderIds || [];
+    return new Set(ids.map((id) => String(id)));
+  });
+
+  // 行数据中的订单键是连续的 v1..vN（由 transformOrdersToTableData 生成），
+  // 遍历到第一个不存在的键即停，替代原来的 v1..v10000 全量扫描
+  const countOrderCells = (row) => {
+    let count = 0;
+    if (row && typeof row === 'object') {
+      while (row[`v${count + 1}`] !== undefined) {
+        count += 1;
+      }
+    }
+    return count;
+  };
+
   // 处理订单数据，固定网格布局：普通模式12列，全屏模式24列，动态行数显示所有数据
   const ordersData = computed(() => {
     const cols = props.isFullscreen ? 24 : 12; // 固定列数
 
-    // 首先计算实际有数据的格子数量
-    let actualDataCount = 0;
-    if (props.data && typeof props.data === 'object') {
-      const row = props.data;
-      // 计算实际有数据的格子数量
-      for (let i = 1; i <= 10000; i++) { // 检查足够多的格子以支持大量数据
-        const colKey = `v${i}`;
-        if (row[colKey] !== undefined && row[colKey] !== '') {
-          actualDataCount = i;
-        }
-      }
-    }
+    const row = props.data && typeof props.data === 'object' ? props.data : null;
+    // 计算实际有数据的格子数量
+    const actualDataCount = row ? countOrderCells(row) : 0;
 
     // 根据数据量计算需要的行数，至少4行
     const neededRows = Math.max(4, Math.ceil(actualDataCount / cols));
     const totalCells = cols * neededRows; // 总格子数
     const result = [];
 
-    console.log('VolumeTable接收到的props.data:', props.data);
-    console.log('网格配置: 列数=', cols, '行数=', neededRows, '总格子数=', totalCells);
-
-    // 如果没有数据或数据不是对象，填充空格子
-    if (!props.data || typeof props.data !== 'object') {
-      console.log('数据为空或格式不正确，填充空格子');
-      for (let i = 0; i < totalCells; i++) {
-        result.push({
-          remaining_volume: '',
-          order_id: '',
-          order_local_id: '',
-          direction: '',
-          price: '',
-          create_time: ''
-        });
-      }
-      return result;
-    }
-
-    const row = props.data;
-    console.log('处理的row数据:', row);
-
     // 填充固定数量的格子
     for (let i = 1; i <= totalCells; i++) {
       const colKey = `v${i}`;
-      const remainingVolume = row[colKey];
 
-      const orderData = {
-        remaining_volume: remainingVolume || '',
-        order_id: row[`${colKey}_order_id`] || '',
-        order_local_id: row[`${colKey}_order_local_id`] || '',
-        direction: row[`${colKey}_direction`] || '',
-        price: row[`${colKey}_price`] || '',
-        create_time: row[`${colKey}_create_time`] || ''
-      };
-
-      result.push(orderData);
+      result.push({
+        remaining_volume: row?.[colKey] ?? '',
+        order_id: row?.[`${colKey}_order_id`] || '',
+        order_local_id: row?.[`${colKey}_order_local_id`] || '',
+        direction: row?.[`${colKey}_direction`] || '',
+        price: row?.[`${colKey}_price`] || '',
+        create_time: row?.[`${colKey}_create_time`] || '',
+      });
     }
 
-    console.log('最终返回的ordersData:', result, '长度:', result.length);
     return result;
   });
 
   // 判断订单是否应该高亮显示
   const isHighlighted = (order) => {
     if (!order || !order.order_local_id) return false;
-    return props.lockedOrderIds.some((lockedId) => String(lockedId) === String(order.order_local_id));
+    return lockedIdSet.value.has(String(order.order_local_id));
   };
 
   // 获取订单详细信息的提示文本
@@ -201,7 +184,7 @@
 
   const isLockedOrder = (orderId) => {
     if (orderId === undefined || orderId === null || orderId === '') return false;
-    return props.lockedOrderIds.some((lockedId) => String(lockedId) === String(orderId));
+    return lockedIdSet.value.has(String(orderId));
   };
 
   // 计算属性：为当前价位的每个锁定订单独立统计队列位置和前后数量
@@ -213,7 +196,8 @@
     const validOrders = [];
     if (props.data && typeof props.data === 'object') {
       const row = props.data;
-      for (let i = 1; i <= 10000; i++) {
+      // 订单键连续 v1..vN，遇空缺即停
+      for (let i = 1; row[`v${i}`] !== undefined; i++) {
         const colKey = `v${i}`;
         const orderLocalId = row[`${colKey}_order_local_id`];
         const remainingVolume = row[colKey];

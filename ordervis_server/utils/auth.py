@@ -9,7 +9,7 @@ from fastapi import HTTPException, Depends, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 import jwt
 from pydantic import BaseModel
-from ordervis.ordervis_server.package import backend_logger
+from ordervis_server.package import backend_logger
 
 # JWT Bearer认证
 security = HTTPBearer(auto_error=False)
@@ -31,7 +31,7 @@ def verify_third_party_token(token: str) -> Optional[TokenData]:
     例如：JWT、OAuth2、自定义token等
     """
     try:
-        from ordervis.ordervis_server.config.auth_config import CURRENT_AUTH_CONFIG
+        from ordervis_server.config.auth_config import CURRENT_AUTH_CONFIG
         
         # 使用配置文件中的设置
         config = CURRENT_AUTH_CONFIG

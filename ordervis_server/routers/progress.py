@@ -5,7 +5,7 @@ Progress HTTP API 路由
 """
 
 from fastapi import APIRouter
-from ordervis.ordervis_server.utils.progress_manager import progress_manager
+from ordervis_server.utils.progress_manager import progress_manager
 
 router = APIRouter()
 

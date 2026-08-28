@@ -365,6 +365,15 @@
         </div>
       </div>
     </div>
+
+    <LockOrderSelector
+      v-model:visible="lockSelectorVisible"
+      :candidates="lockCandidates"
+      :sym="selectSym"
+      :date="selectDate"
+      :is-etf="isETF"
+      @confirm="handleLockConfirm"
+    />
   </div>
 </template>
 
@@ -374,8 +383,17 @@
     import { uploadFile, getListObjectFile, getObjectDownloadFile } from '../../services/minioService';
     import { Table, Empty, Spin, Radio, Button, Select, Input, Tooltip, Progress  } from 'ant-design-vue';
   import { QuestionCircleOutlined } from '@ant-design/icons-vue';
-    import { getSymList, getDateList, getVolumeData, getDatetimeList, getVolumeDataByTime, getSnapshotById, getSnapshotByIndex, getSnapshotByTime, getPastTimeTradeInfo, initTradeBook, getProgress, checkServerStatus } from '/@/api/orderbook/orderbook';
+    import { getSymList, getDateList, getVolumeData, getDatetimeList, getVolumeDataByTime, getSnapshotById, getSnapshotByIndex, getSnapshotByTime, getPastTimeTradeInfo, getNextChange, initTradeBook, getProgress, checkServerStatus } from '/@/api/orderbook/orderbook';
+
+    // 调试日志：仅开发环境且 localStorage.ov_debug === '1' 时输出，
+    // 生产构建静默（替代原先 120+ 处无条件 console.log）
+    const debugLog = (...args) => {
+      if (import.meta.env.DEV && localStorage.getItem('ov_debug') === '1') {
+        console.log(...args);
+      }
+    };
     import VolumeDataTable from './components/VolumeTable.vue'
+    import LockOrderSelector from './components/LockOrderSelector.vue'
     import { useMessage } from '/@/hooks/web/useMessage';
     import { createProgressListener } from '/@/utils/websocket';
     import { useOrderLockStore } from '/@/store/orderLock';
@@ -428,20 +446,20 @@
     const route = useRoute();
     const router = useRouter();
     
-    console.log('🔧 [VolumeQueue] ========== 初始化 Pinia Store 监听 ==========');
-    console.log('   - orderLockStore 已创建');
-    console.log('   - 初始 hasLockData:', orderLockStore.hasLockData);
-    console.log('   - 初始 lockData:', orderLockStore.lockData);
+    debugLog('🔧 [VolumeQueue] ========== 初始化 Pinia Store 监听 ==========');
+    debugLog('   - orderLockStore 已创建');
+    debugLog('   - 初始 hasLockData:', orderLockStore.hasLockData);
+    debugLog('   - 初始 lockData:', orderLockStore.lockData);
     
     // 监听 Pinia store 中的锁定数据变化
     watch(() => orderLockStore.hasLockData, async (hasData, oldValue) => {
-      console.log('🔔 [VolumeQueue] ========== Pinia Store 变化检测 ==========');
-      console.log('   - 旧值 (oldValue):', oldValue);
-      console.log('   - 新值 (hasData):', hasData);
-      console.log('   - lockData:', JSON.stringify(orderLockStore.lockData, null, 2));
+      debugLog('🔔 [VolumeQueue] ========== Pinia Store 变化检测 ==========');
+      debugLog('   - 旧值 (oldValue):', oldValue);
+      debugLog('   - 新值 (hasData):', hasData);
+      debugLog('   - lockData:', JSON.stringify(orderLockStore.lockData, null, 2));
       
       if (hasData) {
-        console.log('✅ [VolumeQueue] 检测到 Pinia 中有新的锁定数据，开始处理');
+        debugLog('✅ [VolumeQueue] 检测到 Pinia 中有新的锁定数据，开始处理');
         
         // 延迟一下确保数据完全写入
         await nextTick();
@@ -455,7 +473,7 @@
             return;
           }
           
-          console.log('🔄 [VolumeQueue] 使用 Pinia 数据处理订单锁定');
+          debugLog('🔄 [VolumeQueue] 使用 Pinia 数据处理订单锁定');
           
           // 调用统一的订单锁定处理器
           await unifiedOrderLockHandler(validationResult.data);
@@ -463,180 +481,113 @@
           // 清理 Pinia 状态中的锁定数据
           orderLockStore.clearLockData();
           
-          console.log('✅ [VolumeQueue] Pinia 订单锁定处理完成');
+          debugLog('✅ [VolumeQueue] Pinia 订单锁定处理完成');
         }, '订单锁定流程');
       }
     }, { immediate: true }); // 立即执行一次，检查是否已有数据
     
-    console.log('✓ [VolumeQueue] Pinia Store 监听器已设置');
+    debugLog('✓ [VolumeQueue] Pinia Store 监听器已设置');
     
     // 处理来自 GlobalOrderSearch 的锁定请求（使用 sessionStorage，刷新后不保留）
+    // 处理来自 GlobalOrderSearch 的自动锁定请求（顺序 await，替代 setTimeout 魔法链）
     const handleGlobalSearchLockRequest = async () => {
-      console.log('🔍 [VolumeQueue] ========== 检查 GlobalOrderSearch 锁定请求 ==========');
-      
-      // 检查是否有来自GlobalOrderSearch的单个订单锁定请求（只从 sessionStorage 读取）
+      // 只从 sessionStorage 读取来自 GlobalOrderSearch 的锁定请求
       const isFromGlobalSearch = sessionStorage.getItem('volumeQueue_isFromGlobalSearch');
       const autoLock = sessionStorage.getItem('volumeQueue_autoLock');
       const lockTime = sessionStorage.getItem('volumeQueue_lockTimestamp'); // 用户输入的时间
       const lockOrderId = sessionStorage.getItem('volumeQueue_lockOrderId');
       const lockSym = sessionStorage.getItem('volumeQueue_lockSym');
       const lockDate = sessionStorage.getItem('volumeQueue_lockDate');
-      
-      console.log('🔍 [VolumeQueue] 检查 sessionStorage 中的锁定数据:');
-      console.log('   - isFromGlobalSearch:', isFromGlobalSearch);
-      console.log('   - autoLock:', autoLock);
-      console.log('   - lockTime:', lockTime);
-      console.log('   - lockOrderId:', lockOrderId);
-      console.log('   - lockSym:', lockSym);
-      console.log('   - lockDate:', lockDate);
-      
-      if (isFromGlobalSearch === 'true' && autoLock === 'true' && lockTime && lockOrderId) {
-        console.log('✅ [VolumeQueue] 检测到来自 GlobalOrderSearch 的自动锁定请求');
-        console.log('📋 [VolumeQueue] 锁定参数:');
-        console.log('   - 订单ID:', lockOrderId);
-        console.log('   - 用户输入的时间:', lockTime);
-        console.log('   - 股票代码:', lockSym);
-        console.log('   - 交易日期:', lockDate);
-        
-        // 延迟执行，确保页面数据已加载
-        setTimeout(async () => {
-          try {
-            console.log('⏱️ [VolumeQueue] 开始自动处理流程...');
-            
-            // 第一步：设置股票代码和日期（如果提供）
-            if (lockSym && lockDate) {
-              console.log('📝 [VolumeQueue] 步骤1: 设置股票代码和日期');
-              securityType.value = getSecurityType(lockSym);
-              selectSym.value = lockSym;
-              selectDate.value = lockDate;
-              hasSymbol.value = true;
-              hasDate.value = true;
-              localStorage.setItem('volumeQueue_selectSym', lockSym);
-              localStorage.setItem('volumeQueue_securityType', securityType.value);
-              localStorage.setItem('volumeQueue_selectDate', lockDate);
-              console.log('   ✓ 股票代码已设置:', selectSym.value);
-              console.log('   ✓ 交易日期已设置:', selectDate.value);
-              console.log('   ✓ hasSymbol:', hasSymbol.value);
-              console.log('   ✓ hasDate:', hasDate.value);
-            } else {
-              console.warn('⚠️ [VolumeQueue] 缺少股票代码或日期');
-            }
-            
-            // 第二步：填充跳转时间输入框
-            console.log('📝 [VolumeQueue] 步骤2: 填充跳转时间');
-            console.log('   - lockTime:', lockTime);
-            
-            // 直接使用用户输入的时间，不做任何处理
-            selectTime.value = lockTime;
-            console.log('   ✓ 跳转时间已填充:', selectTime.value);
-            
-            // 第三步：填充锁定订单ID输入框
-            console.log('📝 [VolumeQueue] 步骤3: 填充订单ID到输入框');
-            lockByIdValue.value = lockOrderId;
-            console.log('   ✓ 订单ID已填充到输入框:', lockByIdValue.value);
-            
-            // 第四步：加载日期列表（如果需要）
-            if (lockSym && !datesData.value.length) {
-              console.log('📝 [VolumeQueue] 步骤4: 加载日期列表');
-              loading.value = true;
-              const params = { sym: lockSym };
-              
-              try {
-                const res = await getDateList(params);
-                loading.value = false;
-                
-                if (res.code == 0) {
-                  datesData.value = res.data.map(item => ({ label: item, value: item }));
-                  console.log('   ✓ 日期列表已加载，共', datesData.value.length, '个日期');
-                } else {
-                  console.error('   ❌ 加载日期列表失败:', res.message);
-                }
-              } catch (error) {
-                loading.value = false;
-                console.error('   ❌ 加载日期列表异常:', error);
-              }
-            }
-            
-            // 第五步：点击"开始"按钮加载数据
-            console.log('📝 [VolumeQueue] 步骤5: 点击"开始"按钮加载数据');
-            console.log('   - hasSymbol:', hasSymbol.value);
-            console.log('   - hasDate:', hasDate.value);
-            console.log('   - loading:', loading.value);
-            
-            if (hasSymbol.value && hasDate.value && !loading.value) {
-              console.log('   ✓ 条件满足，开始加载订单数据');
-              await getOrderbookData();
-              console.log('   ✓ 订单数据加载完成');
-              
-              // 重要：getOrderbookData 会重置 selectTime.value 为 09:30:00.000
-              // 需要重新设置为用户输入的时间
-              selectTime.value = lockTime;
-              console.log('   ✓ 重新设置跳转时间为:', selectTime.value);
-            } else {
-              console.warn('   ⚠️ 条件不满足，无法加载数据');
-            }
-            
-            // 第六步：等待数据加载完成后，跳转到指定时间
-            console.log('📝 [VolumeQueue] 步骤6: 等待数据加载，然后跳转到指定时间');
-            setTimeout(() => {
-              console.log('   🔄 执行时间跳转');
-              console.log('   - 目标时间:', lockTime);
-              clickMoveTime(lockTime); // 直接传入时间参数
-              console.log('   ✓ 时间跳转命令已执行');
-              
-              // 第七步：等待时间跳转完成后，执行订单锁定
-              console.log('📝 [VolumeQueue] 步骤7: 等待时间跳转完成，然后锁定订单');
-              setTimeout(() => {
-                console.log('   🔒 开始执行订单锁定');
-                console.log('   - 订单ID:', lockByIdValue.value);
-                console.log('   - volumeData 是否已加载:', Object.keys(volumeData.value).length > 0);
-                
-                const lockSuccess = lockOrdersById(true);
-                
-                if (lockSuccess) {
-                  console.log('   ✅ 订单自动锁定成功');
-                  createMessage.success('订单已自动锁定并定位');
-                } else {
-                  console.warn('   ⚠️ 订单锁定失败，可能数据未加载完成');
-                  createMessage.warning('订单锁定失败，请手动点击"按ID"按钮');
-                }
-              }, 1000); // 等待时间跳转完成
-            }, 2000); // 等待数据加载完成
-            
-            // 清除 sessionStorage 中的锁定标记，避免重复处理
-            console.log('🧹 [VolumeQueue] 清除 sessionStorage 中的锁定标记');
-            sessionStorage.removeItem('volumeQueue_isFromGlobalSearch');
-            sessionStorage.removeItem('volumeQueue_autoLock');
-            sessionStorage.removeItem('volumeQueue_lockTimestamp');
-            sessionStorage.removeItem('volumeQueue_lockOrderId');
-            sessionStorage.removeItem('volumeQueue_lockSym');
-            sessionStorage.removeItem('volumeQueue_lockDate');
-            console.log('   ✓ 锁定标记已清除');
-            
-            console.log('✅ [VolumeQueue] 自动处理流程设置完成');
-            
-          } catch (error) {
-            console.error('❌ [VolumeQueue] 处理失败:', error);
-            console.error('   错误堆栈:', error.stack);
-            createMessage.error('处理订单锁定请求失败');
-          }
-        }, 1500); // 延迟1.5秒确保页面初始化完成
-      } else {
-        console.log('ℹ️ [VolumeQueue] 未检测到来自 GlobalOrderSearch 的锁定请求');
+
+      // 先清除 sessionStorage 标记，避免后续刷新重复触发
+      sessionStorage.removeItem('volumeQueue_isFromGlobalSearch');
+      sessionStorage.removeItem('volumeQueue_autoLock');
+      sessionStorage.removeItem('volumeQueue_lockTimestamp');
+      sessionStorage.removeItem('volumeQueue_lockOrderId');
+      sessionStorage.removeItem('volumeQueue_lockSym');
+      sessionStorage.removeItem('volumeQueue_lockDate');
+
+      if (!(isFromGlobalSearch === 'true' && autoLock === 'true' && lockTime && lockOrderId)) {
+        return;
       }
-      
-      console.log('🔍 [VolumeQueue] ========== GlobalOrderSearch 锁定请求检查结束 ==========');
+
+      try {
+        // 步骤1：设置股票代码和日期（如果提供）
+        if (lockSym && lockDate) {
+          securityType.value = getSecurityType(lockSym);
+          selectSym.value = lockSym;
+          selectDate.value = lockDate;
+          hasSymbol.value = true;
+          hasDate.value = true;
+          localStorage.setItem('volumeQueue_selectSym', lockSym);
+          localStorage.setItem('volumeQueue_securityType', securityType.value);
+          localStorage.setItem('volumeQueue_selectDate', lockDate);
+        } else {
+          createMessage.warning('缺少股票代码或日期，无法自动锁定');
+          return;
+        }
+
+        // 步骤2：填充跳转时间与订单ID输入框
+        selectTime.value = lockTime;
+        lockByIdValue.value = lockOrderId;
+
+        // 步骤3：加载日期列表（如果尚未加载）
+        if (!datesData.value.length) {
+          loading.value = true;
+          try {
+            const res = await getDateList({ sym: lockSym });
+            if (res.code == 0) {
+              datesData.value = res.data.map(item => ({ label: item, value: item }));
+            }
+          } finally {
+            loading.value = false;
+          }
+        }
+
+        // 步骤4：初始化 TradeBook 并加载数据
+        if (!(hasSymbol.value && hasDate.value && !loading.value)) {
+          createMessage.warning('页面状态不满足加载条件，请手动点击「开始」');
+          return;
+        }
+        await getOrderbookData();
+        // getOrderbookData 会重置 selectTime 为 09:30:00.000，重新设置为用户输入的时间
+        selectTime.value = lockTime;
+
+        // 等待首个快照数据就绪（条件轮询，替代固定 2000ms 魔法延时）
+        const waitStart = Date.now();
+        while (!(volumeData.value && Object.keys(volumeData.value).length > 0)) {
+          if (Date.now() - waitStart > 30000) {
+            createMessage.warning('数据加载超时，请稍后手动操作');
+            return;
+          }
+          await new Promise((resolve) => setTimeout(resolve, 100));
+        }
+
+        // 步骤5：跳转到指定时间（await 保证 volumeData 已就绪后再锁定）
+        await clickMoveTime(lockTime);
+
+        // 步骤6：锁定订单
+        const lockSuccess = lockOrdersById(true);
+        if (lockSuccess) {
+          createMessage.success('订单已自动锁定并定位');
+        } else {
+          createMessage.warning('订单锁定失败，请手动点击「按ID」按钮');
+        }
+      } catch (error) {
+        console.error('处理订单锁定请求失败:', error);
+        createMessage.error('处理订单锁定请求失败');
+      }
     };
 
     // 组件初始化
+    // localStorage 语义约定：volumeQueue_* 键仅用于「同一次会话内」跨组件共享当前选择
+    // （如 GlobalOrderSearch 预填），刷新页面一律清空回到初始状态，不做刷新恢复。
     onMounted(async () => {
-      console.log('📱 [VolumeQueue] ========== 页面 onMounted 开始 ==========');
-      
-      // 清除所有 localStorage 数据（每次刷新都清空）
-      console.log('🧹 [VolumeQueue] 清除所有 localStorage 数据');
+      // 清除 volumeQueue_* localStorage（每次刷新都清空，干净起点）
       const keysToRemove = [
         'volumeQueue_selectSym',
-        'volumeQueue_selectDate', 
+        'volumeQueue_selectDate',
+        'volumeQueue_securityType',
         'volumeQueue_timestamp',
         'volumeQueue_lockOrderId',
         'volumeQueue_isFromGlobalSearch',
@@ -644,53 +595,15 @@
         'volumeQueue_orderIndex',
         'volumeQueue_userInputTime'
       ];
-      keysToRemove.forEach(key => {
-        localStorage.removeItem(key);
-        console.log(`   - 已清除: ${key}`);
-      });
-      console.log('   ✓ localStorage 已清空');
-      
-      // 清除 Pinia Store 中的锁定数据（防止刷新后自动执行）
-      console.log('🧹 [VolumeQueue] 清除 Pinia Store 中的锁定数据');
+      keysToRemove.forEach(key => localStorage.removeItem(key));
+
+      // 清除 Pinia Store 中的锁定数据（防止刷新后自动执行；
+      // 会话内的 Pinia 锁定请求由上方 watch(orderLockStore.hasLockData) 响应式处理）
       orderLockStore.clearLockData();
-      console.log('   ✓ Pinia Store 已清除');
-      
-      // 检查是否有订单锁定数据需要处理（应该总是 false，因为刚清除了）
-      const hasLockData = orderLockStore.hasLockData;
-      
-      if (hasLockData) {
-        console.log('✅ [VolumeQueue] 检测到 Pinia 中的订单锁定数据');
-        
-        // 使用统一的订单锁定处理器和错误处理
-        await withOrderLockErrorHandling(async () => {
-          // 验证锁定数据
-          const validationResult = validateOrderLockData(orderLockStore.lockData);
-          if (!validationResult.success) {
-            showOrderLockFeedback(validationResult);
-            return;
-          }
-          
-          console.log('🔄 [VolumeQueue] 使用Pinia状态管理处理订单锁定');
-          
-          // 调用统一的订单锁定处理器
-          await unifiedOrderLockHandler(validationResult.data);
-          
-          // 清理Pinia状态中的锁定数据
-          orderLockStore.clearLockData();
-          
-          console.log('✅ [VolumeQueue] 订单锁定处理完成');
-        }, '订单锁定流程');
-        
-      } else {
-        // 正常页面加载，恢复用户选择的数据
-        console.log('ℹ️ [VolumeQueue] 正常页面加载，恢复用户数据');
-        
-        await initializePageData();
-      }
-      
+
       // 检查是否有来自GlobalOrderSearch的单个订单锁定请求
       await handleGlobalSearchLockRequest();
-      
+
       // 解决aria-hidden警告
       nextTick(() => {
         const activeElement = document.activeElement;
@@ -698,57 +611,10 @@
           const closestAriaHidden = activeElement.closest('[aria-hidden="true"]');
           if (closestAriaHidden) {
             document.body.focus();
-            console.log('✓ [VolumeQueue] 已解决焦点问题');
           }
         }
       });
-      
-      console.log('📱 [VolumeQueue] ========== 页面 onMounted 结束 ==========');
     });
-    
-    // 初始化页面数据的函数
-    const initializePageData = async () => {
-      try {
-        // 恢复用户选择的数据
-        const savedSym = localStorage.getItem('volumeQueue_selectSym');
-        const savedDate = localStorage.getItem('volumeQueue_selectDate');
-        const savedTime = localStorage.getItem('volumeQueue_timestamp');
-        
-        if (savedSym) {
-          securityType.value = localStorage.getItem('volumeQueue_securityType') || getSecurityType(savedSym);
-          selectSym.value = savedSym;
-          hasSymbol.value = true;
-          console.log('恢复股票代码:', savedSym);
-          
-          // 加载日期列表
-          loading.value = true;
-          const params = { sym: savedSym };
-          
-          const res = await getDateList(params);
-          loading.value = false;
-          
-          if (res.code == 0) {
-            datesData.value = res.data.map(item => ({ label: item, value: item }));
-            
-            // 设置日期和时间
-            if (savedDate) {
-              selectDate.value = savedDate;
-              hasDate.value = true;
-              console.log('恢复交易日期:', savedDate);
-            }
-            
-            if (savedTime) {
-              selectTime.value = savedTime;
-              console.log('恢复时间:', savedTime);
-            }
-          }
-        }
-      } catch (error) {
-        loading.value = false;
-        console.error('初始化页面数据失败:', error);
-        createMessage.error('加载页面数据失败，请检查网络连接');
-      }
-    };
 
     // 从localStorage恢复selectTime，只有在来自GlobalOrderSearch的跳转时才恢复
     // 否则默认为空字符串，确保用户关闭页面重新进入时时间为空
@@ -876,7 +742,7 @@
         }
         
         createMessage.warning(message);
-        console.log(`📝 时间自动修正: "${oldValue}" → "${checkResult.corrected}" (原因: ${checkResult.reason})`);
+        debugLog(`📝 时间自动修正: "${oldValue}" → "${checkResult.corrected}" (原因: ${checkResult.reason})`);
       }
       
       localStorage.setItem('volumeQueue_timestamp', selectTime.value || '');
@@ -1411,8 +1277,7 @@
       return option.value.startsWith(input);
     }
 
-    const clickMoveTime = (targetTime = null) => {
-      // 从localStorage读取存储的单号和日期
+    const clickMoveTime = (targetTime = null) => {      // 从localStorage读取存储的单号和日期
       const savedSym = localStorage.getItem('volumeQueue_selectSym');
       const savedDate = localStorage.getItem('volumeQueue_selectDate');
       
@@ -1442,15 +1307,15 @@
       if (targetTime && typeof targetTime === 'object' && 'isTrusted' in targetTime) {
         // 这是一个事件对象，使用 selectTime.value
         inputTime = selectTime.value;
-        console.log('clickMoveTime: 检测到事件对象，使用 selectTime.value:', inputTime);
+        debugLog('clickMoveTime: 检测到事件对象，使用 selectTime.value:', inputTime);
       } else if (targetTime && typeof targetTime === 'string') {
         // 这是一个有效的时间字符串参数
         inputTime = targetTime;
-        console.log('clickMoveTime: 使用传入的时间参数:', inputTime);
+        debugLog('clickMoveTime: 使用传入的时间参数:', inputTime);
       } else {
         // 没有参数或参数无效，使用 selectTime.value
         inputTime = selectTime.value;
-        console.log('clickMoveTime: 使用 selectTime.value:', inputTime);
+        debugLog('clickMoveTime: 使用 selectTime.value:', inputTime);
       }
       
       // 验证时间是否为空
@@ -1461,8 +1326,36 @@
       
       // 不做边界检查，直接使用用户输入的时间
       // 执行完整的数据处理逻辑，传递第四个参数表示是时间跳转
-      processVolumeData(inputTime, false, false, true);
+      return processVolumeData(inputTime, false, false, true);
     }
+
+    // 将档位 orders 数组转换为 VolumeTable 表格数据格式（共享实现，
+    // 供 processVolumeData / updateVolumeDataFromSnapshot / moveticks 使用）
+    const transformOrdersToTableData = (orders, levelPrice) => {
+      if (!orders || orders.length === 0) {
+        return { orders: [], data: [[], []] };
+      }
+
+      // 创建包含所有订单数据的行，不限制数量
+      const row = {};
+
+      // 将订单数据填入对应的格子中，每个订单占用一个格子，键连续为 v1..vN
+      orders.forEach((order, index) => {
+        const colKey = `v${index + 1}`;
+        row[colKey] = order.remaining_volume || '';
+        // 将订单详细信息作为属性存储
+        row[`${colKey}_order_id`] = order.order_id || '';
+        row[`${colKey}_order_local_id`] = order.order_local_id || '';
+        row[`${colKey}_direction`] = order.direction || '';
+        row[`${colKey}_price`] = levelPrice || order.price || '';
+        row[`${colKey}_create_time`] = order.create_time || '';
+      });
+
+      return {
+        orders: orders, // 保存原始订单数据用于搜索
+        data: [[row], [row]] // VolumeDataTable期望的格式是二维数组，[0]用于普通模式，[1]用于全屏模式
+      };
+    };
 
     const processVolumeData = (timeValue, skipProgressUpdate = false, isInitialLoad = false, isTimeJump = false) => {
       loading.value = true
@@ -1471,7 +1364,7 @@
         date: selectDate.value,
         time: timeValue
       }
-      getVolumeDataByTime(params).then((res) => {
+      return getVolumeDataByTime(params).then((res) => {
         if (res.code == 0 && res.data && res.data.snapshot) {
           // 更新 isETF 状态
           isETF.value = res.data.is_ETF || false;
@@ -1479,34 +1372,6 @@
           // 处理volumeData - 从snapshot中提取需要的数据
           const snapshot = res.data.snapshot;
           const levels = snapshot.levels || {};
-
-          // 转换orders数组为表格数据格式的函数
-          const transformOrdersToTableData = (orders, levelPrice) => {
-            if (!orders || orders.length === 0) {
-              return { orders: [], data: [[], []] };
-            }
-
-            // 创建包含所有订单数据的行，不限制数量
-            const row = {};
-
-            // 将订单数据填入对应的格子中，每个订单占用一个格子
-            orders.forEach((order, index) => {
-              const colKey = `v${index + 1}`;
-              row[colKey] = order.remaining_volume || '';
-              // 将订单详细信息作为属性存储
-              row[`${colKey}_order_id`] = order.order_id || '';
-              row[`${colKey}_order_local_id`] = order.order_local_id || '';
-              row[`${colKey}_direction`] = order.direction || '';
-              row[`${colKey}_price`] = levelPrice || order.price || '';
-              row[`${colKey}_create_time`] = order.create_time || '';
-            });
-
-            const result = {
-              orders: orders, // 保存原始订单数据用于搜索
-              data: [[row], [row]] // VolumeDataTable期望的格式是二维数组，[0]用于普通模式，[1]用于全屏模式
-            };
-            return result;
-          };
 
           // 构建volumeData格式
           volumeData.value = {
@@ -1781,17 +1646,12 @@
 
     getStaticData()
 
+    // A2：通过 next_change 接口实现高效步进，每次最多 2 个请求
+    // 第 1 个请求查目标时间快照；若快照时间戳与当前相同（区间内无变化），
+    // 第 2 个请求用 next_change 直接取相邻的下一个/上一个变化点。
     const moveTimes = async (intevel) => {
-      // 解析当前时间
       const currentTime = selectTime.value;
-      const [hours, minutes, seconds] = currentTime.split(':');
-      const [sec, ms] = seconds.split('.');
-
-      // 转换为毫秒
-      let totalMs = parseInt(hours) * 3600000 + parseInt(minutes) * 60000 + parseInt(sec) * 1000 + parseInt(ms || 0);
-
-      // 添加时间间隔
-      totalMs += intevel;
+      let totalMs = parseTimeToMs(currentTime) + intevel;
 
       // 确保时间在交易时间范围内 (09:30:00.000 - 15:00:00.000)
       const minTime = 9 * 3600000 + 30 * 60000; // 09:30:00.000
@@ -1800,16 +1660,7 @@
       if (totalMs < minTime) totalMs = minTime;
       if (totalMs > maxTime) totalMs = maxTime;
 
-      const formatTime = (msValue) => {
-        const h = Math.floor(msValue / 3600000);
-        const m = Math.floor((msValue % 3600000) / 60000);
-        const s = Math.floor((msValue % 60000) / 1000);
-        const mm = msValue % 1000;
-        return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}.${mm.toString().padStart(3, '0')}`;
-      };
-
-      // 格式化时间字符串
-      const newTime = formatTime(totalMs);
+      const newTime = formatMsToTimeStr(totalMs);
 
       // 更新时间
       selectTime.value = newTime;
@@ -1817,59 +1668,54 @@
 
       loading.value = true;
 
+      const direction = intevel > 0 ? 1 : -1;
+      const moveDesc = `${direction > 0 ? '向前' : '向后'}移动${Math.abs(intevel) >= 1000 ? `${Math.abs(intevel) / 1000}秒` : `${Math.abs(intevel)}毫秒`}`;
+
       try {
-        const stepMs = Math.abs(intevel) <= 50 ? intevel : (intevel > 0 ? 50 : -50);
-        const maxSteps = 200; // 最多推进 200 * 50ms = 10s
-        let attempt = 0;
-        let queryMs = totalMs;
-        let lastRes = null;
+        // 第 1 个请求：目标时间处的快照
+        const res = await getVolumeDataByTime({ sym: selectSym.value, date: selectDate.value, time: newTime });
 
-        while (attempt < maxSteps) {
-          const queryTime = formatTime(queryMs);
-          const params = { sym: selectSym.value, date: selectDate.value, time: queryTime };
-          const res = await getVolumeDataByTime(params);
-          lastRes = res;
+        if (res.code == 0 && res.data && res.data.snapshot) {
+          const snapshot = res.data.snapshot;
+          const returnedTime = extractTimeFromTimestamp(snapshot.timestamp || res.data.time || '');
 
-          if (res.code == 0 && res.data && res.data.snapshot) {
-            const snapshot = res.data.snapshot;
-            const rawSnapshotTime = snapshot.timestamp || res.data.time || '';
-            const returnedTime = extractTimeFromTimestamp(rawSnapshotTime);
+          if (returnedTime !== currentTime) {
+            // 目标区间内有变化，直接使用该快照
+            updateVolumeDataFromSnapshot(snapshot, res.data);
+            updateMarketData();
 
-            // 找到不同时间戳的快照，停止继续尝试
-            if (returnedTime !== currentTime) {
-              updateVolumeDataFromSnapshot(snapshot, res.data);
-              updateMarketData();
-
-              if (returnedTime !== queryTime) {
-                createMessage.info(`目标时间 ${queryTime} 无新快照，已自动跳转到 ${returnedTime}`);
-              } else {
-                createMessage.success(`时间移动成功：${intevel > 0 ? '向前' : '向后'}移动${Math.abs(intevel) >= 1000 ? `${Math.abs(intevel) / 1000}秒` : `${Math.abs(intevel)}毫秒`}`);
-              }
-
-              loading.value = false;
-              return;
+            if (returnedTime !== newTime) {
+              createMessage.info(`目标时间 ${newTime} 无新快照，已自动跳转到 ${returnedTime}`);
+            } else {
+              createMessage.success(`时间移动成功：${moveDesc}`);
             }
-          } else {
-            break;
+            return;
           }
 
-          queryMs += stepMs;
-          if (queryMs < minTime || queryMs > maxTime) {
-            break;
-          }
-          attempt += 1;
-        }
+          // 第 2 个请求：目标时间处仍是当前快照（区间内无变化）→ 取相邻变化点
+          const nc = await getNextChange({ sym: selectSym.value, date: selectDate.value, time: newTime, direction });
 
-        // 未能找到不同时间戳的快照
-        if (lastRes && lastRes.code == 0 && lastRes.data && lastRes.data.snapshot) {
-          updateVolumeDataFromSnapshot(lastRes.data.snapshot, lastRes.data);
-          updateMarketData();
+          if (nc.code == 0 && nc.data && nc.data.snapshot) {
+            updateVolumeDataFromSnapshot(nc.data.snapshot, nc.data);
+            updateMarketData();
+            const ncTime = extractTimeFromTimestamp(nc.data.snapshot.timestamp || '');
+            createMessage.info(`${newTime} 附近无变化，已跳转到${direction > 0 ? '下一个' : '上一个'}变化点 ${ncTime}`);
+            return;
+          }
+
+          // 当天没有更多变化：恢复原时间显示
+          createMessage.warning(nc.message || `已到达当天${direction > 0 ? '最后' : '最早'}一个变化点，无法继续移动`);
+          selectTime.value = currentTime;
+          localStorage.setItem('volumeQueue_timestamp', currentTime);
+        } else {
+          createMessage.error(res.message || '查询数据失败');
+          selectTime.value = currentTime;
+          localStorage.setItem('volumeQueue_timestamp', currentTime);
         }
-        createMessage.warning('当前时间附近没有新的时间戳快照，已保持原快照');
       } catch (error) {
         createMessage.error('网络请求失败，请检查网络连接');
-        selectTime.value = newTime;
-        localStorage.setItem('volumeQueue_timestamp', newTime);
+        selectTime.value = currentTime;
+        localStorage.setItem('volumeQueue_timestamp', currentTime);
       } finally {
         loading.value = false;
       }
@@ -1881,6 +1727,15 @@
       const [hours, minutes, seconds] = timeStr.split(':');
       const [sec, ms] = seconds.split('.');
       return parseInt(hours) * 3600000 + parseInt(minutes) * 60000 + parseInt(sec) * 1000 + parseInt(ms || 0);
+    }
+
+    // 辅助函数：将毫秒转换为 HH:mm:ss.SSS 格式
+    const formatMsToTimeStr = (msValue) => {
+      const h = Math.floor(msValue / 3600000);
+      const m = Math.floor((msValue % 3600000) / 60000);
+      const s = Math.floor((msValue % 60000) / 1000);
+      const mm = msValue % 1000;
+      return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}.${mm.toString().padStart(3, '0')}`;
     }
 
     // 辅助函数：从完整时间戳中提取时间部分（HH:mm:ss.SSS格式）
@@ -1912,29 +1767,6 @@
     // 辅助函数：从snapshot更新volumeData（提取公共逻辑）
     const updateVolumeDataFromSnapshot = (snapshot, responseData) => {
       const levels = snapshot.levels || {};
-
-      // 转换orders数组为表格数据格式的函数
-      const transformOrdersToTableData = (orders, levelPrice) => {
-        if (!orders || orders.length === 0) {
-          return { orders: [], data: [[], []] };
-        }
-
-        const row = {};
-        orders.forEach((order, index) => {
-          const colKey = `v${index + 1}`;
-          row[colKey] = order.remaining_volume || '';
-          row[`${colKey}_order_id`] = order.order_id || '';
-          row[`${colKey}_order_local_id`] = order.order_local_id || '';
-          row[`${colKey}_direction`] = order.direction || '';
-          row[`${colKey}_price`] = levelPrice || order.price || '';
-          row[`${colKey}_create_time`] = order.create_time || '';
-        });
-
-        return {
-          orders: orders,
-          data: [[row], [row]]
-        };
-      };
 
       // 构建volumeData格式
       volumeData.value = {
@@ -2016,34 +1848,6 @@
           // 使用与processVolumeData相同的数据处理逻辑
           const snapshot = res.data.snapshot;
           const levels = snapshot.levels || {};
-
-          // 转换orders数组为表格数据格式的函数（与processVolumeData中的函数相同）
-          const transformOrdersToTableData = (orders, levelPrice) => {
-            if (!orders || orders.length === 0) {
-              return { orders: [], data: [[], []] };
-            }
-
-            // 创建包含所有订单数据的行，不限制数量
-            const row = {};
-
-            // 将订单数据填入对应的格子中，每个订单占用一个格子
-            orders.forEach((order, index) => {
-              const colKey = `v${index + 1}`;
-              row[colKey] = order.remaining_volume || '';
-              // 将订单详细信息作为属性存储
-              row[`${colKey}_order_id`] = order.order_id || '';
-              row[`${colKey}_order_local_id`] = order.order_local_id || '';
-              row[`${colKey}_direction`] = order.direction || '';
-              row[`${colKey}_price`] = levelPrice || order.price || '';
-              row[`${colKey}_create_time`] = order.create_time || '';
-            });
-
-            const result = {
-              orders: orders, // 保存原始订单数据用于搜索
-              data: [[row], [row]] // VolumeDataTable期望的格式是二维数组，[0]用于普通模式，[1]用于全屏模式
-            };
-            return result;
-          };
 
           // 构建volumeData格式（与processVolumeData相同）
           volumeData.value = {
@@ -2152,8 +1956,20 @@
       }
     }
 
-    // 按数量锁定订单逻辑函数
-     const lockOrdersByVolume = () => {
+    // 按数量锁定订单逻辑函数：收集所有符合的订单，弹出选择器让用户勾选（B1）
+    const lockSelectorVisible = ref(false);
+    const lockCandidates = ref([]);
+
+    const LOCK_LEVEL_DEFS = [
+      { key: 'ask1', label: '卖一', direction: '卖' },
+      { key: 'ask2', label: '卖二', direction: '卖' },
+      { key: 'ask3', label: '卖三', direction: '卖' },
+      { key: 'bid1', label: '买一', direction: '买' },
+      { key: 'bid2', label: '买二', direction: '买' },
+      { key: 'bid3', label: '买三', direction: '买' },
+    ];
+
+    const lockOrdersByVolume = () => {
        if (!lockByVolumeValue.value.trim()) {
          createMessage.warning('请输入remaining volume数值');
          return;
@@ -2165,59 +1981,73 @@
          return;
        }
 
-       const foundOrderIds = [];
+       const candidates = [];
 
-       // 遍历所有volumeData中的订单数据
-       Object.keys(volumeData.value).forEach(key => {
-         if (key.includes('ask') || key.includes('bid')) {
-           const data = volumeData.value[key];
-           if (data && data.data && data.data[0] && data.data[0][0]) {
-             const rowData = data.data[0][0];
-             // 遍历所有v1, v2, v3...列
-              for (let i = 1; i <= 10000; i++) {
-                const volumeKey = `v${i}`;
-                const orderLocalIdKey = `${volumeKey}_order_local_id`;
-                if (rowData[volumeKey] === searchNum && rowData[orderLocalIdKey]) {
-                  foundOrderIds.push(rowData[orderLocalIdKey]);
-                }
-              }
+       // 遍历六档队列，收集所有剩余量匹配的订单（v 键连续，遇到空缺即停）
+       for (const levelDef of LOCK_LEVEL_DEFS) {
+         const data = volumeData.value[levelDef.key];
+         const rowData = data && data.data && data.data[0] && data.data[0][0];
+         if (!rowData) continue;
+         for (let i = 1; ; i++) {
+           const volumeKey = `v${i}`;
+           if (rowData[volumeKey] === undefined || rowData[volumeKey] === '') break;
+           const orderLocalId = rowData[`${volumeKey}_order_local_id`];
+           if (parseFloat(rowData[volumeKey]) === searchNum && orderLocalId) {
+             candidates.push({
+               order_local_id: String(orderLocalId),
+               order_id: rowData[`${volumeKey}_order_id`] || '',
+               volume: rowData[volumeKey],
+               price: volumeData.value[`${levelDef.key}_price`] || '',
+               levelLabel: levelDef.label,
+               direction: levelDef.direction,
+               create_time: rowData[`${volumeKey}_create_time`] || '',
+             });
            }
          }
-       });
+       }
 
-       if (foundOrderIds.length > 0) {
-          lockedOrderIds.value = [...new Set([...lockedOrderIds.value, ...foundOrderIds])]; // 去重并合并
-          createMessage.success(`成功锁定 ${foundOrderIds.length} 个订单`);
-        } else {
-          createMessage.info('未找到匹配的订单');
-        }
-      };
+       if (candidates.length === 0) {
+         createMessage.info('未找到匹配的订单');
+         return;
+       }
+
+       // 弹出选择器，由用户勾选要锁定的订单
+       lockCandidates.value = candidates;
+       lockSelectorVisible.value = true;
+     };
+
+    // 选择器确认：批量锁定勾选的订单
+    const handleLockConfirm = (ids) => {
+      const merged = [...new Set([...lockedOrderIds.value, ...ids])];
+      lockedOrderIds.value = merged;
+      createMessage.success(`成功锁定 ${ids.length} 个订单`);
+    };
 
      // 按ID锁定订单逻辑函数（增强版，支持自动导航）
       const lockOrdersById = (enableAutoScroll = false) => {
-        console.log('🔒 [lockOrdersById] ========== 开始执行 ==========');
-        console.log('   📋 参数信息:');
-        console.log('      - 输入框值 (lockByIdValue.value):', lockByIdValue.value);
-        console.log('      - 自动导航 (enableAutoScroll):', enableAutoScroll);
-        console.log('      - volumeData 键数量:', Object.keys(volumeData.value).length);
-        console.log('      - 当前已锁定订单数:', lockedOrderIds.value.length);
+        debugLog('🔒 [lockOrdersById] ========== 开始执行 ==========');
+        debugLog('   📋 参数信息:');
+        debugLog('      - 输入框值 (lockByIdValue.value):', lockByIdValue.value);
+        debugLog('      - 自动导航 (enableAutoScroll):', enableAutoScroll);
+        debugLog('      - volumeData 键数量:', Object.keys(volumeData.value).length);
+        debugLog('      - 当前已锁定订单数:', lockedOrderIds.value.length);
         
         const searchId = lockByIdValue.value;
         
         if (!searchId || !searchId.trim()) {
-          console.log('❌ [lockOrdersById] 订单ID为空，无法执行锁定');
+          debugLog('❌ [lockOrdersById] 订单ID为空，无法执行锁定');
           createMessage.warning('请输入订单ID');
           return false;
         }
 
         const finalSearchId = searchId.trim();
-        console.log('🔍 [lockOrdersById] 开始搜索订单ID:', finalSearchId);
-        console.log('   📊 volumeData 结构:');
+        debugLog('🔍 [lockOrdersById] 开始搜索订单ID:', finalSearchId);
+        debugLog('   📊 volumeData 结构:');
         Object.keys(volumeData.value).forEach(key => {
           if (key.includes('ask') || key.includes('bid')) {
             const data = volumeData.value[key];
             const hasData = data && data.data && data.data[0] && data.data[0][0];
-            console.log(`      - ${key}: ${hasData ? '有数据' : '无数据'}`);
+            debugLog(`      - ${key}: ${hasData ? '有数据' : '无数据'}`);
           }
         });
         
@@ -2231,7 +2061,7 @@
             const data = volumeData.value[key];
             if (data && data.data && data.data[0] && data.data[0][0]) {
               const rowData = data.data[0][0];
-              console.log(`   🔎 检查表格: ${key}`);
+              debugLog(`   🔎 检查表格: ${key}`);
               
               // 遍历所有v1, v2, v3...列
                for (let i = 1; i <= 10000; i++) {
@@ -2240,16 +2070,16 @@
                  
                  // 只在前10列输出详细日志，避免日志过多
                  if (i <= 10 && orderLocalId) {
-                   console.log(`      - 列 ${i}: order_local_id = ${orderLocalId}`);
+                   debugLog(`      - 列 ${i}: order_local_id = ${orderLocalId}`);
                  }
                  
                  if (orderLocalId === finalSearchId) {
-                   console.log('✅ [lockOrdersById] 找到匹配的订单!');
-                   console.log(`   📍 位置信息:`);
-                   console.log(`      - 表格: ${key}`);
-                   console.log(`      - 列索引: ${i}`);
-                   console.log(`      - order_local_id: ${orderLocalId}`);
-                   console.log(`      - remaining_volume: ${rowData[`v${i}`]}`);
+                   debugLog('✅ [lockOrdersById] 找到匹配的订单!');
+                   debugLog(`   📍 位置信息:`);
+                   debugLog(`      - 表格: ${key}`);
+                   debugLog(`      - 列索引: ${i}`);
+                   debugLog(`      - order_local_id: ${orderLocalId}`);
+                   debugLog(`      - remaining_volume: ${rowData[`v${i}`]}`);
                    
                    foundInTable = key;
                    foundInColumn = i;
@@ -2257,48 +2087,48 @@
                    // 直接锁定匹配的order_local_id
                    if (!lockedOrderIds.value.includes(finalSearchId)) {
                      lockedOrderIds.value.push(finalSearchId);
-                     console.log('   ✓ 订单已添加到锁定列表');
-                     console.log('   📋 当前锁定列表:', lockedOrderIds.value);
+                     debugLog('   ✓ 订单已添加到锁定列表');
+                     debugLog('   📋 当前锁定列表:', lockedOrderIds.value);
                    } else {
-                     console.log('   ℹ️ 订单已在锁定列表中');
+                     debugLog('   ℹ️ 订单已在锁定列表中');
                    }
                    found = true;
                    break outerLoop;
                  }
                }
             } else {
-              console.log(`   ⚠️ 表格 ${key} 无数据或结构不正确`);
+              debugLog(`   ⚠️ 表格 ${key} 无数据或结构不正确`);
             }
           }
         }
 
         if (found) {
-          console.log('✅ [lockOrdersById] 订单锁定成功');
-          console.log(`   📊 锁定结果:`);
-          console.log(`      - 找到位置: ${foundInTable} 列 ${foundInColumn}`);
-          console.log(`      - 已锁定订单总数: ${lockedOrderIds.value.length}`);
+          debugLog('✅ [lockOrdersById] 订单锁定成功');
+          debugLog(`   📊 锁定结果:`);
+          debugLog(`      - 找到位置: ${foundInTable} 列 ${foundInColumn}`);
+          debugLog(`      - 已锁定订单总数: ${lockedOrderIds.value.length}`);
           createMessage.success('成功锁定订单');
           
           // 如果启用自动导航，则滚动到订单位置
           if (enableAutoScroll) {
-            console.log('📍 [lockOrdersById] 启用自动导航，准备滚动到订单位置');
+            debugLog('📍 [lockOrdersById] 启用自动导航，准备滚动到订单位置');
             setTimeout(() => {
               scrollToLockedOrder(finalSearchId);
             }, 300);
           } else {
-            console.log('ℹ️ [lockOrdersById] 未启用自动导航');
+            debugLog('ℹ️ [lockOrdersById] 未启用自动导航');
           }
         } else {
-          console.log('❌ [lockOrdersById] 未找到匹配的订单');
-          console.log('   🔍 搜索的订单ID:', finalSearchId);
-          console.log('   📊 已搜索的表格:', Object.keys(volumeData.value).filter(k => k.includes('ask') || k.includes('bid')));
+          debugLog('❌ [lockOrdersById] 未找到匹配的订单');
+          debugLog('   🔍 搜索的订单ID:', finalSearchId);
+          debugLog('   📊 已搜索的表格:', Object.keys(volumeData.value).filter(k => k.includes('ask') || k.includes('bid')));
           createMessage.info('未找到匹配的订单ID');
         }
         
-        console.log('🔒 [lockOrdersById] ========== 执行结束 ==========');
-        console.log('   📊 最终状态:');
-        console.log('      - 是否找到: ', found);
-        console.log('      - 已锁定订单数:', lockedOrderIds.value.length);
+        debugLog('🔒 [lockOrdersById] ========== 执行结束 ==========');
+        debugLog('   📊 最终状态:');
+        debugLog('      - 是否找到: ', found);
+        debugLog('      - 已锁定订单数:', lockedOrderIds.value.length);
         
         return found;
        };
@@ -2311,7 +2141,7 @@
 
      // 从GlobalOrderSearch跳转时的滚动到锁定订单位置（增强版）
      const scrollToLockedOrderFromGlobalSearch = (orderId) => {
-       console.log('scrollToLockedOrderFromGlobalSearch called with orderId:', orderId);
+       debugLog('scrollToLockedOrderFromGlobalSearch called with orderId:', orderId);
        
        if (!orderId) {
          console.warn('orderId is empty');
@@ -2334,7 +2164,7 @@
            for (let i = 1; i <= 10000; i++) {
              const orderLocalIdKey = `v${i}_order_local_id`;
              if (rowData[orderLocalIdKey] === orderId) {
-               console.log('Found order in', key, 'at column index:', i);
+               debugLog('Found order in', key, 'at column index:', i);
                
                // 找到对应的DOM元素
                // VolumeDataTable中的单元格通常有data-order-id属性或包含订单ID的内容
@@ -2358,7 +2188,7 @@
        
        // 如果没有找到单元格，尝试通过其他方式查找
        if (!targetCell) {
-         console.log('Searching for cell by orderId content');
+         debugLog('Searching for cell by orderId content');
          const allCells = document.querySelectorAll('.volume-cell, [data-order-id]');
          
          for (const cell of allCells) {
@@ -2375,7 +2205,7 @@
          return;
        }
        
-       console.log('Found target cell, starting scroll process');
+       debugLog('Found target cell, starting scroll process');
        
        // 找到表格容器（向上查找）
        let parent = targetCell.parentElement;
@@ -2384,7 +2214,7 @@
          if (style.overflow === 'auto' || style.overflow === 'scroll' || 
              style.overflowY === 'auto' || style.overflowY === 'scroll') {
            targetTableContainer = parent;
-           console.log('Found scrollable table container at level:', i);
+           debugLog('Found scrollable table container at level:', i);
            break;
          }
          parent = parent.parentElement;
@@ -2403,7 +2233,7 @@
            behavior: 'smooth'
          });
          
-         console.log('Scrolling table container to position:', scrollTop);
+         debugLog('Scrolling table container to position:', scrollTop);
        }
        
        // 第二步：滚动页面，确保表格容器在视野中
@@ -2419,7 +2249,7 @@
              behavior: 'smooth'
            });
            
-           console.log('Scrolling page to position:', scrollTop);
+           debugLog('Scrolling page to position:', scrollTop);
          }
          
          // 第三步：添加闪烁效果突出显示
@@ -2436,8 +2266,8 @@
      const scrollToLockedOrder = (orderId) => {
        const finalOrderId = orderId;
        
-       console.log('📍 [scrollToLockedOrder] 开始导航到订单');
-       console.log('   订单ID:', finalOrderId);
+       debugLog('📍 [scrollToLockedOrder] 开始导航到订单');
+       debugLog('   订单ID:', finalOrderId);
        
        if (!finalOrderId) {
          console.warn('❌ [scrollToLockedOrder] 订单ID为空');
@@ -2445,7 +2275,7 @@
        }
        
        // 第一步：在 volumeData 中查找订单的位置
-       console.log('🔍 [scrollToLockedOrder] 第一步：在 volumeData 中查找订单位置');
+       debugLog('🔍 [scrollToLockedOrder] 第一步：在 volumeData 中查找订单位置');
        let foundTable = null;
        let foundColumn = null;
        
@@ -2459,7 +2289,7 @@
              if (rowData[orderLocalIdKey] === finalOrderId) {
                foundTable = key;
                foundColumn = i;
-               console.log(`   ✓ 在 volumeData 中找到订单: 表格=${key}, 列=${i}`);
+               debugLog(`   ✓ 在 volumeData 中找到订单: 表格=${key}, 列=${i}`);
                break;
              }
            }
@@ -2469,14 +2299,14 @@
        
        if (!foundTable || !foundColumn) {
          console.warn('❌ [scrollToLockedOrder] 在 volumeData 中未找到订单');
-         console.log('   - 搜索的订单ID:', finalOrderId);
-         console.log('   - 已锁定的订单ID列表:', lockedOrderIds.value);
+         debugLog('   - 搜索的订单ID:', finalOrderId);
+         debugLog('   - 已锁定的订单ID列表:', lockedOrderIds.value);
          createMessage.warning('未找到订单在数据中的位置');
          return;
        }
        
        // 第二步：使用 CSS 选择器定位到具体的单元格
-       console.log('🔍 [scrollToLockedOrder] 第二步：在 DOM 中定位单元格');
+       debugLog('🔍 [scrollToLockedOrder] 第二步：在 DOM 中定位单元格');
        
        // 尝试多种选择器策略
        let targetCell = null;
@@ -2494,7 +2324,7 @@
            const cells = document.querySelectorAll(selector);
            if (cells.length > 0) {
              targetCell = cells[0];
-             console.log(`   ✓ 通过选择器找到单元格: ${selector}`);
+             debugLog(`   ✓ 通过选择器找到单元格: ${selector}`);
              break;
            }
          } catch (e) {
@@ -2503,14 +2333,14 @@
        }
        
        // 策略2: 等待 Vue 渲染后查找高亮单元格（最可靠的方法）
-       console.log('   等待 Vue 渲染后查找高亮单元格...');
+       debugLog('   等待 Vue 渲染后查找高亮单元格...');
        
        // 定义滚动执行函数
        const performScrollToCell = (cell) => {
-         console.log('📜 [scrollToLockedOrder] 开始执行滚动');
+         debugLog('📜 [scrollToLockedOrder] 开始执行滚动');
          
          // 第二步：找到表格容器（向上查找）
-         console.log('🔍 查找表格容器');
+         debugLog('🔍 查找表格容器');
          let tableContainer = null;
          let parent = cell.parentElement;
          
@@ -2519,28 +2349,28 @@
            if (style.overflow === 'auto' || style.overflow === 'scroll' || 
                style.overflowY === 'auto' || style.overflowY === 'scroll') {
              tableContainer = parent;
-             console.log(`   ✓ 找到表格容器，层级: ${i}`);
+             debugLog(`   ✓ 找到表格容器，层级: ${i}`);
              break;
            }
            parent = parent.parentElement;
          }
          
          if (!tableContainer) {
-           console.log('   ℹ️ 未找到表格容器，使用窗口滚动');
+           debugLog('   ℹ️ 未找到表格容器，使用窗口滚动');
          }
          
          // 第三步：滚动表格容器
          if (tableContainer) {
-           console.log('📜 滚动表格容器');
+           debugLog('📜 滚动表格容器');
            const cellRect = cell.getBoundingClientRect();
            const containerRect = tableContainer.getBoundingClientRect();
            
            const scrollLeft = cellRect.left - containerRect.left + tableContainer.scrollLeft - (containerRect.width / 2);
            const scrollTop = cellRect.top - containerRect.top + tableContainer.scrollTop - (containerRect.height / 2);
            
-           console.log(`   单元格位置: left=${cellRect.left}, top=${cellRect.top}`);
-           console.log(`   容器位置: left=${containerRect.left}, top=${containerRect.top}`);
-           console.log(`   计算滚动距离: left=${scrollLeft}, top=${scrollTop}`);
+           debugLog(`   单元格位置: left=${cellRect.left}, top=${cellRect.top}`);
+           debugLog(`   容器位置: left=${containerRect.left}, top=${containerRect.top}`);
+           debugLog(`   计算滚动距离: left=${scrollLeft}, top=${scrollTop}`);
            
            tableContainer.scrollTo({
              left: Math.max(0, scrollLeft),
@@ -2548,40 +2378,40 @@
              behavior: 'smooth'
            });
            
-           console.log('   ✓ 表格容器滚动完成');
+           debugLog('   ✓ 表格容器滚动完成');
          }
          
          // 第四步：滚动页面
          setTimeout(() => {
-           console.log('📜 滚动页面');
+           debugLog('📜 滚动页面');
            const cellRect = cell.getBoundingClientRect();
            
-           console.log(`   单元格距离顶部: ${cellRect.top}`);
-           console.log(`   窗口高度: ${window.innerHeight}`);
+           debugLog(`   单元格距离顶部: ${cellRect.top}`);
+           debugLog(`   窗口高度: ${window.innerHeight}`);
            
            if (cellRect.top < 0 || cellRect.top > window.innerHeight) {
              const scrollTop = window.pageYOffset + cellRect.top - (window.innerHeight / 2);
              
-             console.log(`   计算页面滚动距离: ${scrollTop}`);
+             debugLog(`   计算页面滚动距离: ${scrollTop}`);
              
              window.scrollTo({
                top: Math.max(0, scrollTop),
                behavior: 'smooth'
              });
              
-             console.log('   ✓ 页面滚动完成');
+             debugLog('   ✓ 页面滚动完成');
            } else {
-             console.log('   ℹ️ 单元格已在视野中，无需滚动页面');
+             debugLog('   ℹ️ 单元格已在视野中，无需滚动页面');
            }
            
            // 第五步：添加闪烁效果
-           console.log('✨ 添加闪烁效果');
+           debugLog('✨ 添加闪烁效果');
            cell.classList.add('highlight-flash');
-           console.log('   ✓ 闪烁效果已添加，持续3秒');
+           debugLog('   ✓ 闪烁效果已添加，持续3秒');
            
            setTimeout(() => {
              cell.classList.remove('highlight-flash');
-             console.log('   ✓ 闪烁效果已移除');
+             debugLog('   ✓ 闪烁效果已移除');
            }, 3000);
            
            // 如果进度条正在显示，更新进度条信息；否则显示独立通知
@@ -2591,20 +2421,20 @@
            } else {
              createMessage.success('已定位到订单位置');
            }
-           console.log('✅ [scrollToLockedOrder] 导航完成');
+           debugLog('✅ [scrollToLockedOrder] 导航完成');
          }, 300);
        };
        
        // 使用 nextTick 确保 Vue 已经更新 DOM
        nextTick(() => {
          const highlightedCells = document.querySelectorAll('.volume-cell.highlighted');
-         console.log(`   找到 ${highlightedCells.length} 个高亮单元格`);
+         debugLog(`   找到 ${highlightedCells.length} 个高亮单元格`);
          
          if (highlightedCells.length > 0) {
            // 找到包含我们订单的那个单元格
            // 由于我们刚刚锁定了这个订单，它应该是最后一个被高亮的
            targetCell = highlightedCells[highlightedCells.length - 1];
-           console.log('   ✓ 找到高亮单元格');
+           debugLog('   ✓ 找到高亮单元格');
            
            // 执行滚动
            performScrollToCell(targetCell);
@@ -2624,7 +2454,7 @@
      // 查找包含锁定订单的表格单元格（旧版本，保留用于兼容）
      const scrollToLockedOrderOld = (orderId) => {
        const highlightedCells = document.querySelectorAll('.volume-cell.highlighted');
-       console.log('Found highlighted cells:', highlightedCells.length);
+       debugLog('Found highlighted cells:', highlightedCells.length);
        
        // 查找表格容器的多种可能选择器
        const possibleTableContainers = [
@@ -2641,7 +2471,7 @@
        for (const selector of possibleTableContainers) {
          tableContainer = document.querySelector(selector);
          if (tableContainer) {
-           console.log('Found table container with selector:', selector);
+           debugLog('Found table container with selector:', selector);
            break;
          }
        }
@@ -2657,7 +2487,7 @@
            if (style.overflow === 'auto' || style.overflow === 'scroll' || 
                style.overflowY === 'auto' || style.overflowY === 'scroll') {
              tableContainer = parent;
-             console.log('Found scrollable parent container');
+             debugLog('Found scrollable parent container');
              break;
            }
            parent = parent.parentElement;
@@ -2666,12 +2496,12 @@
        
        // 如果还是没有找到，使用窗口作为滚动容器
        if (!tableContainer) {
-         console.log('No table container found, will use window');
+         debugLog('No table container found, will use window');
          tableContainer = document.documentElement;
        }
        
        if (highlightedCells.length > 0) {
-         console.log('Using highlighted cells for scrolling');
+         debugLog('Using highlighted cells for scrolling');
          // 找到第一个高亮单元格
          const firstCell = highlightedCells[0];
          
@@ -2697,7 +2527,7 @@
                behavior: 'smooth'
              });
            }
-           console.log('Scrolling to position:', scrollTop);
+           debugLog('Scrolling to position:', scrollTop);
          }
          
          // 添加闪烁效果以突出显示
@@ -2706,22 +2536,22 @@
            firstCell.classList.remove('highlight-flash');
          }, 2000);
        } else {
-         console.log('No highlighted cells found, searching by orderId');
+         debugLog('No highlighted cells found, searching by orderId');
          // 如果没有找到高亮单元格，尝试查找包含订单ID的单元格
          const allCells = document.querySelectorAll('.volume-cell');
-         console.log('Found total cells:', allCells.length);
+         debugLog('Found total cells:', allCells.length);
          let targetCell = null;
          
          for (const cell of allCells) {
            if (cell.textContent && cell.textContent.includes(finalOrderId)) {
              targetCell = cell;
-             console.log('Found cell containing orderId:', finalOrderId);
+             debugLog('Found cell containing orderId:', finalOrderId);
              break;
            }
          }
          
          if (targetCell) {
-           console.log('Using target cell for scrolling');
+           debugLog('Using target cell for scrolling');
            
            if (tableContainer) {
              // 计算单元格在容器中的位置
@@ -2745,7 +2575,7 @@
                  behavior: 'smooth'
                });
              }
-             console.log('Scrolling to position:', scrollTop);
+             debugLog('Scrolling to position:', scrollTop);
            }
            
            // 添加闪烁效果以突出显示
@@ -2760,157 +2590,6 @@
        }
      };
 
-    // 旧版获取市场数据并计算差值的函数 - 已注释掉，使用新的API替代
-    /*
-    const updateMarketData = async () => {
-      if (!selectSym.value || !selectDate.value || !selectTime.value) {
-        return;
-      }
-
-      try {
-        // 获取当前时间戳的数据
-        const currentParams = {
-          sym: selectSym.value,
-          date: selectDate.value,
-          time: selectTime.value
-        };
-
-        const currentRes = await getSnapshotByTime(currentParams);
-
-        if (currentRes.code === 0 && currentRes.data?.snapshot?.market_data) {
-          const currentMarketData = currentRes.data.snapshot.market_data;
-
-          // 使用API返回的timestamp作为当前时间基准
-          const apiTimestamp = currentRes.data.snapshot.timestamp || currentRes.data.time || selectTime.value;
-          const extractedTime = extractTimeFromTimestamp(apiTimestamp);
-
-          // 定义时间间隔（毫秒）
-          const timeIntervals = {
-            last_1min: 60000,    // 1分钟
-            last_3s: 3000,      // 3秒
-            last_500ms: 500,    // 500毫秒
-            last_50ms: 50,      // 50毫秒
-            last_10ms: 10       // 10毫秒
-          };
-
-          // 存储各时间段的差值数据
-          const marketDiffs = {};
-
-          // 为每个时间间隔计算差值
-          for (const [key, interval] of Object.entries(timeIntervals)) {
-            // 直接基于API返回的真实timestamp计算过去时间
-            const apiTime = new Date(`${selectDate.value} ${extractedTime}`);
-            const pastTime = new Date(apiTime.getTime() - interval);
-            const pastTimeStr = formatTimeWithMilliseconds(pastTime);
-
-            const pastParams = {
-              sym: selectSym.value,
-              date: selectDate.value,
-              time: pastTimeStr
-            };
-
-            try {
-              const pastRes = await getSnapshotByTime(pastParams);
-
-              let diff = {
-                bid_create_count: currentMarketData.bid_create_count || 0,
-                bid_cancel_count: currentMarketData.bid_cancel_count || 0,
-                bid_traded_count: currentMarketData.bid_traded_count || 0,
-                ask_create_count: currentMarketData.ask_create_count || 0,
-                ask_cancel_count: currentMarketData.ask_cancel_count || 0,
-                ask_traded_count: currentMarketData.ask_traded_count || 0
-              };
-
-              // 如果成功获取到过去时间的数据，计算差值
-              if (pastRes.code === 0 && pastRes.data?.snapshot?.market_data) {
-                const pastMarketData = pastRes.data.snapshot.market_data;
-                diff = {
-                  bid_create_count: (currentMarketData.bid_create_count || 0) - (pastMarketData.bid_create_count || 0),
-                  bid_cancel_count: (currentMarketData.bid_cancel_count || 0) - (pastMarketData.bid_cancel_count || 0),
-                  bid_traded_count: (currentMarketData.bid_traded_count || 0) - (pastMarketData.bid_traded_count || 0),
-                  ask_create_count: (currentMarketData.ask_create_count || 0) - (pastMarketData.ask_create_count || 0),
-                  ask_cancel_count: (currentMarketData.ask_cancel_count || 0) - (pastMarketData.ask_cancel_count || 0),
-                  ask_traded_count: (currentMarketData.ask_traded_count || 0) - (pastMarketData.ask_traded_count || 0)
-                };
-              }
-
-              marketDiffs[key] = diff;
-            } catch (error) {
-              console.error(`获取${key}数据失败:`, error);
-              // 如果获取失败，使用当前数据作为差值
-              marketDiffs[key] = {
-                bid_create_count: currentMarketData.bid_create_count || 0,
-                bid_cancel_count: currentMarketData.bid_cancel_count || 0,
-                bid_traded_count: currentMarketData.bid_traded_count || 0,
-                ask_create_count: currentMarketData.ask_create_count || 0,
-                ask_cancel_count: currentMarketData.ask_cancel_count || 0,
-                ask_traded_count: currentMarketData.ask_traded_count || 0
-              };
-            }
-          }
-
-          // 更新marketData（保持向后兼容，使用1分钟数据）
-          marketData.value = marketDiffs.last_1min || {};
-
-          // 更新tradeData显示
-          const tradeDataArray = [
-            {
-              level: '买一新增挂单',
-              last_1min: marketDiffs.last_1min?.bid_create_count || 0,
-              last_3s: marketDiffs.last_3s?.bid_create_count || 0,
-              last_500ms: marketDiffs.last_500ms?.bid_create_count || 0,
-              last_50ms: marketDiffs.last_50ms?.bid_create_count || 0,
-              last_10ms: marketDiffs.last_10ms?.bid_create_count || 0
-            },
-            {
-              level: '买一新增撤单',
-              last_1min: marketDiffs.last_1min?.bid_cancel_count || 0,
-              last_3s: marketDiffs.last_3s?.bid_cancel_count || 0,
-              last_500ms: marketDiffs.last_500ms?.bid_cancel_count || 0,
-              last_50ms: marketDiffs.last_50ms?.bid_cancel_count || 0,
-              last_10ms: marketDiffs.last_10ms?.bid_cancel_count || 0
-            },
-            {
-              level: '买一新增成交',
-              last_1min: marketDiffs.last_1min?.bid_traded_count || 0,
-              last_3s: marketDiffs.last_3s?.bid_traded_count || 0,
-              last_500ms: marketDiffs.last_500ms?.bid_traded_count || 0,
-              last_50ms: marketDiffs.last_50ms?.bid_traded_count || 0,
-              last_10ms: marketDiffs.last_10ms?.bid_traded_count || 0
-            },
-            {
-              level: '卖一新增挂单',
-              last_1min: marketDiffs.last_1min?.ask_create_count || 0,
-              last_3s: marketDiffs.last_3s?.ask_create_count || 0,
-              last_500ms: marketDiffs.last_500ms?.ask_create_count || 0,
-              last_50ms: marketDiffs.last_50ms?.ask_create_count || 0,
-              last_10ms: marketDiffs.last_10ms?.ask_create_count || 0
-            },
-            {
-              level: '卖一新增撤单',
-              last_1min: marketDiffs.last_1min?.ask_cancel_count || 0,
-              last_3s: marketDiffs.last_3s?.ask_cancel_count || 0,
-              last_500ms: marketDiffs.last_500ms?.ask_cancel_count || 0,
-              last_50ms: marketDiffs.last_50ms?.ask_cancel_count || 0,
-              last_10ms: marketDiffs.last_10ms?.ask_cancel_count || 0
-            },
-            {
-              level: '卖一新增成交',
-              last_1min: marketDiffs.last_1min?.ask_traded_count || 0,
-              last_3s: marketDiffs.last_3s?.ask_traded_count || 0,
-              last_500ms: marketDiffs.last_500ms?.ask_traded_count || 0,
-              last_50ms: marketDiffs.last_50ms?.ask_traded_count || 0,
-              last_10ms: marketDiffs.last_10ms?.ask_traded_count || 0
-            }
-          ];
-
-          tradeData.value = tradeDataArray;
-        }
-      } catch (error) {
-        console.error('获取市场数据失败:', error);
-      }
-    };
-    */
 
     // 新版使用单一API获取订单统计信息
     const updateMarketData = async () => {
@@ -2984,8 +2663,8 @@
         // 设置事件监听器
         progressWebSocket
           .onProgress((data) => {
-            console.log('🎯 Vue组件收到进度更新:', data);
-            console.log('📊 更新前的进度状态:', JSON.stringify(initProgress.value, null, 2));
+            debugLog('🎯 Vue组件收到进度更新:', data);
+            debugLog('📊 更新前的进度状态:', JSON.stringify(initProgress.value, null, 2));
 
             // 更新进度状态
             initProgress.value.progress = data.progress;
@@ -2995,11 +2674,11 @@
             // 更新进度条通知
             updateProgressNotification();
 
-            console.log('📈 更新后的进度状态:', JSON.stringify(initProgress.value, null, 2));
-            console.log('🎨 UI是否显示进度条:', initProgress.value.show);
+            debugLog('📈 更新后的进度状态:', JSON.stringify(initProgress.value, null, 2));
+            debugLog('🎨 UI是否显示进度条:', initProgress.value.show);
           })
           .onComplete((data) => {
-            console.log('✅ Vue组件收到初始化完成:', data);
+            debugLog('✅ Vue组件收到初始化完成:', data);
             initProgress.value.progress = 100;
             initProgress.value.message = '初始化完成，开始加载数据...';
             initProgress.value.status = 'completed';
@@ -3007,10 +2686,10 @@
             // 更新进度条通知为完成状态
             updateProgressNotification();
 
-            console.log('🎉 初始化完成，最终状态:', JSON.stringify(initProgress.value, null, 2));
+            debugLog('🎉 初始化完成，最终状态:', JSON.stringify(initProgress.value, null, 2));
 
             // 初始化完成后立即开始数据加载
-            console.log('🚀 初始化完成，立即开始数据加载');
+            debugLog('🚀 初始化完成，立即开始数据加载');
             proceedWithDataLoading();
 
             createMessage.success('初始化完成，正在加载数据...');
@@ -3056,12 +2735,12 @@
             setTimeout(() => {
               closeProgressNotification();
               initProgress.value.show = false;
-              console.log('🔒 错误后进度条已隐藏');
+              debugLog('🔒 错误后进度条已隐藏');
             }, 8000); // 延长显示时间让用户看到完整错误信息
           })
           .onConnect(() => {
-            console.log('🔗 Vue组件：WebSocket连接成功');
-            console.log('🎯 当前任务信息:', {
+            debugLog('🔗 Vue组件：WebSocket连接成功');
+            debugLog('🎯 当前任务信息:', {
               taskId: initProgress.value.taskId,
               symbol: selectSym.value,
               date: selectDate.value,
@@ -3069,13 +2748,13 @@
             });
           })
           .onDisconnect(() => {
-            console.log('🔌 Vue组件：WebSocket连接断开');
+            debugLog('🔌 Vue组件：WebSocket连接断开');
           });
 
         // 开始连接
         await progressWebSocket.connect();
 
-        console.log('🚀 WebSocket连接已建立，taskId:', taskId);
+        debugLog('🚀 WebSocket连接已建立，taskId:', taskId);
 
       } catch (error) {
         console.error('❌ 启动WebSocket进度监听失败:', error);
@@ -3112,12 +2791,12 @@
       closeProgressNotification();
       
       // 清空 localStorage 中的选择数据（关闭标签页时清空）
-      console.log('🧹 [VolumeQueue] 组件卸载，清空 localStorage 数据');
+      debugLog('🧹 [VolumeQueue] 组件卸载，清空 localStorage 数据');
       localStorage.removeItem('volumeQueue_selectSym');
       localStorage.removeItem('volumeQueue_selectDate');
       localStorage.removeItem('volumeQueue_timestamp');
       localStorage.removeItem('volumeQueue_orderIndex');
-      console.log('   ✓ 已清空股票代码、日期、时间戳和订单索引');
+      debugLog('   ✓ 已清空股票代码、日期、时间戳和订单索引');
     });
     
     // 处理从GlobalOrderSearch跳转到订单快照并锁定订单
@@ -3277,7 +2956,7 @@
           // 重要：getOrderbookData 会重置 selectTime.value 为 09:30:00.000
           // 需要重新设置为用户输入的时间（使用函数开头提取的 timeOnly）
           selectTime.value = timeOnly;
-          console.log('   ✓ [unifiedOrderLockHandler] 重新设置跳转时间为:', selectTime.value);
+          debugLog('   ✓ [unifiedOrderLockHandler] 重新设置跳转时间为:', selectTime.value);
           
           lockProgress.value.detail = '订单数据加载完成';
           updateLockProgressNotification();
@@ -3293,7 +2972,7 @@
         await new Promise(resolve => setTimeout(resolve, 2000));
         
         // 调用前再次确认时间
-        console.log('   ✓ [步骤6] 调用 clickMoveTime，传入时间参数:', timeOnly);
+        debugLog('   ✓ [步骤6] 调用 clickMoveTime，传入时间参数:', timeOnly);
         clickMoveTime(timeOnly); // 直接传入时间参数，不依赖 selectTime.value
         lockProgress.value.detail = '时间跳转完成';
         updateLockProgressNotification();
@@ -3356,12 +3035,12 @@
 
     // 跳转到指定时间并锁定订单
     const jumpToTimeWithLock = async (timestamp, orderId) => {
-      console.log('开始跳转到时间:', timestamp, '订单ID:', orderId);
+      debugLog('开始跳转到时间:', timestamp, '订单ID:', orderId);
             // 边界检测
         const checkResult = checkTimeBoundary(timestamp);
         selectTime.value = checkResult.corrected;
         localStorage.setItem('volumeQueue_timestamp', checkResult.corrected);
-        console.log('   ✓ 时间已设置并保存:', checkResult.corrected);
+        debugLog('   ✓ 时间已设置并保存:', checkResult.corrected);
 
       // 延迟执行，确保数据加载完成
       return new Promise((resolve, reject) => {
@@ -3417,7 +3096,7 @@
         localStorage.removeItem(key);
       });
       
-      console.log('已清除localStorage中的锁定数据');
+      debugLog('已清除localStorage中的锁定数据');
     };
 
     // 根据订单ID锁定订单（返回布尔值表示是否成功）
@@ -3437,7 +3116,7 @@
                  // 直接锁定匹配的order_local_id
                  if (!lockedOrderIds.value.includes(orderId)) {
                    lockedOrderIds.value.push(orderId);
-                   console.log('成功锁定订单ID:', orderId);
+                   debugLog('成功锁定订单ID:', orderId);
                  }
                  found = true;
                  break outerLoop; // 找到后立即退出所有遍历
@@ -3448,7 +3127,7 @@
       }
 
       if (!found) {
-        console.log('未找到匹配的订单ID:', orderId);
+        debugLog('未找到匹配的订单ID:', orderId);
         createMessage.info(`未找到匹配的订单ID: ${orderId}`);
       }
       

@@ -12,13 +12,26 @@ const FUND_CODE_PREFIXES = ['15', '16', '50', '51', '52', '56', '58', '59'];
 function explicitSecurityType(item: any): SecurityType | undefined {
   if (!item || typeof item !== 'object') return undefined;
 
-  const type = item.securityType ?? item.security_type ?? item.asset_type ?? item.instrument_type;
+  // 后端 symList 自 2026-08-28 起返回 { code, type: 'stock' | 'fund' | 'unknown' }
+  const type =
+    item.type ?? item.securityType ?? item.security_type ?? item.asset_type ?? item.instrument_type;
   if (typeof type === 'string') {
     const normalized = type.toLowerCase();
-    if (normalized.includes('fund') || normalized.includes('etf') || normalized.includes('lof') || normalized.includes('基金')) {
+    // unknown 表示后端两张表里都没查到，落回代码段启发式判断
+    if (normalized === 'unknown') return undefined;
+    if (
+      normalized.includes('fund') ||
+      normalized.includes('etf') ||
+      normalized.includes('lof') ||
+      normalized.includes('基金')
+    ) {
       return 'fund';
     }
-    if (normalized.includes('stock') || normalized.includes('equity') || normalized.includes('股票')) {
+    if (
+      normalized.includes('stock') ||
+      normalized.includes('equity') ||
+      normalized.includes('股票')
+    ) {
       return 'stock';
     }
   }

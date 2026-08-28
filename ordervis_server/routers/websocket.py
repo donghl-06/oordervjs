@@ -9,7 +9,7 @@ import uuid
 import asyncio
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from typing import Dict, Set
-from ordervis.ordervis_server.utils.progress_manager import progress_manager
+from ordervis_server.utils.progress_manager import progress_manager
 
 router = APIRouter()
 

@@ -42,3 +42,6 @@ venv/
 
 # Runtime output
 *.log
+
+# Runtime state
+.runtime/
