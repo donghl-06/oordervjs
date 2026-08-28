@@ -1,367 +1,255 @@
 <template>
   <context-holder />
-  <div class="m-2 overflow-hidden bg-white">
-    <div class="main-mode" style="margin-bottom: 40px">
-      <div class="data-ul-top">
-        <div class="data-li">
-          <div class="filter-mode compact-row primary-filter-row">
-            <div class="filter-item">
-              <span class="field-label">证券类型</span>
-              <Select
-                v-model:value="securityType"
-                style="width: 90px; margin-left: 11px"
-                :options="securityTypeOptions"
-                :allow-clear="false"
-                @change="handleSecurityTypeChange"
-              />
-            </div>
-            <div class="filter-item">
-              <span class="field-label">证券代码</span>
-              <Select
-                v-model:value="selectSym"
-                show-search
-                :placeholder="`选择${securityType === 'fund' ? '基金' : '股票'}代码`"
-                style="width: 120px; margin-left: 11px"
-                :options="filteredSymsData"
-                :filter-option="symFilterOption"
-                @change="selectSymItem"
-                @search="handleSymSearch"
-                @blur="handleSymBlur"
-                @focus="handleSymFocus"
-                @input="handleSymInput"
-                :allow-clear="false"
-              />
-            </div>
-            <div class="filter-item">
-              <span class="field-label">日期</span>
-              <Select
-                v-model:value="selectDate"
-                show-search
-                placeholder="选择日期"
-                style="width: 140px"
-                :options="datesData"
-                :filter-option="dateFilterOption"
-                @change="selectDateItem"
-                @search="handleDateSearch"
-                @blur="handleDateBlur"
-                :allow-clear="false"
-              />
-            </div>
-            <div class="filter-item">
-              <Button
-                type="primary"
-                @click="getOrderbookData"
-                :disabled="!hasSymbol || !hasDate || loading"
-              >
-                <Spin v-if="loading" size="small" style="margin-right: 8px" />
-                {{ loading ? '加载中...' : '开始' }}
-              </Button>
-            </div>
-          </div>
+  <div class="ov-page" :class="{ 'ov-dark': darkMode }">
+    <!-- ① 顶栏 第1行：标的选择 + 状态展示 -->
+    <div class="ov-topbar">
+      <div class="ov-topbar-row">
+        <div class="ov-bar-group">
+          <Select
+            v-model:value="securityType"
+            class="ov-select w-type"
+            :options="securityTypeOptions"
+            :allow-clear="false"
+            @change="handleSecurityTypeChange"
+          />
+          <Select
+            v-model:value="selectSym"
+            show-search
+            :placeholder="`选择${securityType === 'fund' ? '基金' : '股票'}代码`"
+            class="ov-select w-sym"
+            :options="filteredSymsData"
+            :filter-option="symFilterOption"
+            :allow-clear="false"
+            @change="selectSymItem"
+            @search="handleSymSearch"
+            @blur="handleSymBlur"
+            @focus="handleSymFocus"
+            @input="handleSymInput"
+          />
+          <Select
+            v-model:value="selectDate"
+            show-search
+            placeholder="选择日期"
+            class="ov-select w-date"
+            :options="datesData"
+            :filter-option="dateFilterOption"
+            :allow-clear="false"
+            @change="selectDateItem"
+            @search="handleDateSearch"
+            @blur="handleDateBlur"
+          />
+          <Button
+            type="primary"
+            :disabled="!hasSymbol || !hasDate || loading"
+            @click="getOrderbookData"
+          >
+            <Spin v-if="loading" size="small" style="margin-right: 8px" />
+            {{ loading ? '加载中...' : '开始' }}
+          </Button>
+        </div>
+        <div class="ov-bar-status">
+          <span class="status-item">
+            当前时刻 <b class="num">{{ displayTime || '--:--:--.---' }}</b>
+          </span>
+          <span class="status-item">
+            changeIndex
+            <Tooltip title="移动订单会改变该值">
+              <b class="num">#{{ changeIndex }}</b>
+            </Tooltip>
+          </span>
+          <span class="status-item">价差 <b class="num">{{ spreadText }}</b></span>
+          <span class="status-item">已锁定 <b class="num">{{ lockedOrderIds.length }}</b></span>
+          <span class="status-item theme-toggle">
+            暗色
+            <Switch v-model:checked="darkMode" size="small" />
+          </span>
+        </div>
+      </div>
 
-          <div class="filter-mode compact-row navigation-row">
-            <div class="filter-item">
-              <span class="field-label">跳转时间</span>
-              <Input
-                v-model:value="displayTime"
-                placeholder="输入跳转时间"
-                style="width: 160px; margin-left: 11px"
-                @change="handleTimeInputChange"
-                @blur="handleTimeBlur"
-              />
-              <Button
-                type="primary"
-                @click="clickMoveTime"
-                :disabled="isButtonDisabled"
-                style="margin-left: 5px"
-                >跳转到时间</Button
-              >
-            </div>
-            <div class="filter-item info-item">
-              <span class="info-label">当前快照ID: {{ changeIndex }}</span>
-              <Tooltip title="移动订单会改变该值">
-                <QuestionCircleOutlined style="margin-left: 5px; color: #1890ff; cursor: pointer" />
-              </Tooltip>
-              <!-- <span class="info-label" style="margin-left: 20px;">快照ID: {{ snapshotId }}</span>
-                <Tooltip title="snapshot_id">
-                  <QuestionCircleOutlined style="margin-left: 5px; color: #1890ff; cursor: pointer;" />
-                </Tooltip> -->
-            </div>
-          </div>
-          <div class="filter-mode compact-row lock-row">
-            <div class="filter-item lock-controls">
-              <span class="field-label">锁定订单</span>
-              <Input
-                v-model:value="lockByVolumeValue"
-                placeholder="数量"
-                style="width: 80px; margin-left: 8px"
-              />
-              <Button
-                type="primary"
-                size="small"
-                @click="lockOrdersByVolume"
-                style="margin-left: 3px"
-                >按量</Button
-              >
-              <Input
-                v-model:value="lockByIdValue"
-                placeholder="订单ID"
-                style="width: auto; min-width: 80px; max-width: 150px; margin-left: 8px"
-              />
-              <Button type="primary" size="small" @click="lockOrdersById(true)" style="margin-left: 3px"
-                >按ID</Button
-              >
-              <Button size="small" @click="clearLockedOrders" style="margin-left: 8px">清除</Button>
-            </div>
-            <div class="filter-item info-item">
-              <span class="info-label">已锁定: {{ lockedOrderIds.length }}个</span>
-            </div>
-          </div>
-          <div class="filter-mode compact-row movement-row">
-            <span class="section-label">时间快进</span>
-            <div class="button-group">
-              <Button
-                type="primary"
-                @click="moveTimes(50)"
-                :disabled="isButtonDisabled"
-                class="time-btn"
-                >+50ms</Button
-              >
-              <Button
-                type="primary"
-                @click="moveTimes(500)"
-                :disabled="isButtonDisabled"
-                class="time-btn"
-                >+500ms</Button
-              >
-              <Button
-                type="primary"
-                @click="moveTimes(3000)"
-                :disabled="isButtonDisabled"
-                class="time-btn"
-                >+3s</Button
-              >
-              <Button
-                type="primary"
-                @click="moveTimes(60000)"
-                :disabled="isButtonDisabled"
-                class="time-btn"
-                >+1min</Button
-              >
-            </div>
-          </div>
-          <div class="filter-mode compact-row movement-row">
-            <span class="section-label">时间回退</span>
-            <div class="button-group">
-              <Button
-                type="primary"
-                @click="moveTimes(-50)"
-                :disabled="isButtonDisabled"
-                class="time-btn"
-                >-50ms</Button
-              >
-              <Button
-                type="primary"
-                @click="moveTimes(-500)"
-                :disabled="isButtonDisabled"
-                class="time-btn"
-                >-500ms</Button
-              >
-              <Button
-                type="primary"
-                @click="moveTimes(-3000)"
-                :disabled="isButtonDisabled"
-                class="time-btn"
-                >-3s</Button
-              >
-              <Button
-                type="primary"
-                @click="moveTimes(-60000)"
-                :disabled="isButtonDisabled"
-                class="time-btn"
-                >-1min</Button
-              >
-            </div>
-          </div>
-          <div class="filter-mode compact-row movement-row">
-            <span class="section-label">订单快进</span>
-            <div class="button-group">
-              <Button
-                type="primary"
-                @click="moveticks(1)"
-                :disabled="isButtonDisabled"
-                class="order-btn"
-                >+1 orders</Button
-              >
-              <Button
-                type="primary"
-                @click="moveticks(50)"
-                :disabled="isButtonDisabled"
-                class="order-btn"
-                >+50 orders</Button
-              >
-              <Button
-                type="primary"
-                @click="moveticks(100)"
-                :disabled="isButtonDisabled"
-                class="order-btn"
-                >+100 orders</Button
-              >
-              <Button
-                type="primary"
-                @click="moveticks(500)"
-                :disabled="isButtonDisabled"
-                class="order-btn"
-                >+500 orders</Button
-              >
-            </div>
-          </div>
-          <div class="filter-mode compact-row movement-row">
-            <span class="section-label">订单回退</span>
-            <div class="button-group">
-              <Button
-                type="primary"
-                @click="moveticks(-1)"
-                :disabled="isButtonDisabled"
-                class="order-btn"
-                >-1 orders</Button
-              >
-              <Button
-                type="primary"
-                @click="moveticks(-50)"
-                :disabled="isButtonDisabled"
-                class="order-btn"
-                >-50 orders</Button
-              >
-              <Button
-                type="primary"
-                @click="moveticks(-100)"
-                :disabled="isButtonDisabled"
-                class="order-btn"
-                >-100 orders</Button
-              >
-              <Button
-                type="primary"
-                @click="moveticks(-500)"
-                :disabled="isButtonDisabled"
-                class="order-btn"
-                >-500 orders</Button
-              >
-            </div>
-          </div>
-        </div>
-        <div class="data-li">
-          <Table
-            :columns="level_columns"
-            :dataSource="levelData"
-            :scroll="{ y: 200 }"
-            :pagination="false"
-            :style="{ height: '250px' }"
-            bordered
+      <!-- ① 顶栏 第2行：控制条 -->
+      <div class="ov-topbar-row controls">
+        <div class="ov-bar-group">
+          <span class="group-label">时间</span>
+          <Select
+            v-model:value="smallStepMs"
+            class="ov-select w-step"
+            :options="smallStepOptions"
+            :allow-clear="false"
           />
-        </div>
-        <div class="data-li">
-          <Table
-            :columns="trader_columns"
-            :dataSource="tradeData"
-            :scroll="{ y: 200 }"
-            :pagination="false"
-            :style="{ height: '250px' }"
-            bordered
+          <Button :disabled="isButtonDisabled" @click="moveTimes(-smallStepMs)">◀</Button>
+          <Button :disabled="isButtonDisabled" @click="moveTimes(smallStepMs)">▶</Button>
+          <Select
+            v-model:value="bigStepMs"
+            class="ov-select w-step"
+            :options="bigStepOptions"
+            :allow-clear="false"
           />
+          <Button :disabled="isButtonDisabled" @click="moveTimes(-bigStepMs)">◀◀</Button>
+          <Button :disabled="isButtonDisabled" @click="moveTimes(bigStepMs)">▶▶</Button>
+        </div>
+        <div class="ov-bar-group">
+          <span class="group-label">订单</span>
+          <Select
+            v-model:value="orderStep"
+            class="ov-select w-step"
+            :options="orderStepOptions"
+            :allow-clear="false"
+          />
+          <Button :disabled="isButtonDisabled" @click="moveticks(-orderStep)">◀</Button>
+          <Button :disabled="isButtonDisabled" @click="moveticks(orderStep)">▶</Button>
+        </div>
+        <div class="ov-bar-group">
+          <span class="group-label">跳转</span>
+          <Input
+            v-model:value="displayTime"
+            placeholder="HH:mm:ss.SSS"
+            class="ov-time-input"
+            @change="handleTimeInputChange"
+            @blur="handleTimeBlur"
+          />
+          <Button type="primary" :disabled="isButtonDisabled" @click="clickMoveTime">跳转</Button>
+        </div>
+        <div class="ov-bar-group">
+          <span class="group-label">锁定</span>
+          <Input v-model:value="lockByVolumeValue" placeholder="数量" class="ov-lock-input" />
+          <Button type="primary" size="small" @click="lockOrdersByVolume">按量</Button>
+          <Input v-model:value="lockByIdValue" placeholder="订单ID" class="ov-lock-input w-id" />
+          <Button type="primary" size="small" @click="lockOrdersById(true)">按ID</Button>
+          <Button size="small" @click="clearLockedOrders">清除</Button>
         </div>
       </div>
     </div>
-    <div class="main-mode">
-      <div class="data-ul">
-        <div class="data-li" v-show="showAsk">
-          <VolumeDataTable
-            :data="volumeData['ask1']?.data?.[0]?.[0] || {}"
-            :derection="
-              volumeData['ask1_price']
-                ? '  卖一价：' + (volumeData['ask1_price'] / 10000).toFixed(volumeData.is_ETF ? 3 : 2)
-                : '  卖一价：'
-            "
-            :is-fullscreen="askIsFullscreen"
-            :search-value="searchValue"
-            :locked-order-ids="lockedOrderIds"
-            @update-fullscreen="showHideTable"
-          />
+
+    <!-- 主体：左数据区 + 右图表区 -->
+    <div class="ov-body">
+      <!-- ② 左侧数据区：买左卖右 -->
+      <div class="ov-data-area">
+        <div class="ov-queue-zones">
+          <div v-show="showBid" class="ov-zone bid-zone">
+            <VolumeDataTable
+              :data="volumeData['bid3']?.data?.[0]?.[0] || {}"
+              :derection="
+                volumeData['bid3_price']
+                  ? '  买三价：' + (volumeData['bid3_price'] / 10000).toFixed(volumeData.is_ETF ? 3 : 2)
+                  : '  买三价：'
+              "
+              :is-fullscreen="bidIsFullscreen"
+              :search-value="searchValue"
+              :locked-order-ids="lockedOrderIds"
+              :cols="queueCols"
+              @update-fullscreen="showHideTable"
+            />
+            <VolumeDataTable
+              :data="volumeData['bid2']?.data?.[0]?.[0] || {}"
+              :derection="
+                volumeData['bid2_price']
+                  ? '  买二价：' + (volumeData['bid2_price'] / 10000).toFixed(volumeData.is_ETF ? 3 : 2)
+                  : '  买二价：'
+              "
+              :is-fullscreen="bidIsFullscreen"
+              :search-value="searchValue"
+              :locked-order-ids="lockedOrderIds"
+              :cols="queueCols"
+              @update-fullscreen="showHideTable"
+            />
+            <VolumeDataTable
+              :data="volumeData['bid1']?.data?.[0]?.[0] || {}"
+              :derection="
+                volumeData['bid1_price']
+                  ? '  买一价：' + (volumeData['bid1_price'] / 10000).toFixed(volumeData.is_ETF ? 3 : 2)
+                  : '  买一价：'
+              "
+              :is-fullscreen="bidIsFullscreen"
+              :search-value="searchValue"
+              :locked-order-ids="lockedOrderIds"
+              :cols="queueCols"
+              :show-tooltip="true"
+              @update-fullscreen="showHideTable"
+            />
+          </div>
+          <div v-show="showAsk" class="ov-zone ask-zone">
+            <VolumeDataTable
+              :data="volumeData['ask1']?.data?.[0]?.[0] || {}"
+              :derection="
+                volumeData['ask1_price']
+                  ? '  卖一价：' + (volumeData['ask1_price'] / 10000).toFixed(volumeData.is_ETF ? 3 : 2)
+                  : '  卖一价：'
+              "
+              :is-fullscreen="askIsFullscreen"
+              :search-value="searchValue"
+              :locked-order-ids="lockedOrderIds"
+              :cols="queueCols"
+              @update-fullscreen="showHideTable"
+            />
+            <VolumeDataTable
+              :data="volumeData['ask2']?.data?.[0]?.[0] || {}"
+              :derection="
+                volumeData['ask2_price']
+                  ? '  卖二价：' + (volumeData['ask2_price'] / 10000).toFixed(volumeData.is_ETF ? 3 : 2)
+                  : '  卖二价：'
+              "
+              :is-fullscreen="askIsFullscreen"
+              :search-value="searchValue"
+              :locked-order-ids="lockedOrderIds"
+              :cols="queueCols"
+              @update-fullscreen="showHideTable"
+            />
+            <VolumeDataTable
+              :data="volumeData['ask3']?.data?.[0]?.[0] || {}"
+              :derection="
+                volumeData['ask3_price']
+                  ? '  卖三价：' + (volumeData['ask3_price'] / 10000).toFixed(volumeData.is_ETF ? 3 : 2)
+                  : '  卖三价：'
+              "
+              :is-fullscreen="askIsFullscreen"
+              :search-value="searchValue"
+              :locked-order-ids="lockedOrderIds"
+              :cols="queueCols"
+              @update-fullscreen="showHideTable"
+            />
+          </div>
         </div>
-        <div class="data-li" v-show="showBid">
-          <VolumeDataTable
-            :data="volumeData['bid1']?.data?.[0]?.[0] || {}"
-            :derection="
-              volumeData['bid1_price']
-                ? '  买一价：' + (volumeData['bid1_price'] / 10000).toFixed(volumeData.is_ETF ? 3 : 2)
-                : '  买一价：'
-            "
-            :is-fullscreen="bidIsFullscreen"
-            :search-value="searchValue"
-            :locked-order-ids="lockedOrderIds"
-            :show-tooltip="true"
-            @update-fullscreen="showHideTable"
-          />
+
+        <!-- 汇总指标行：六档总量/单数 + 一档流量 -->
+        <div class="ov-summary-strip">
+          <div class="sum-levels">
+            <div
+              v-for="item in levelData"
+              :key="item.level"
+              class="sum-level"
+              :class="item.level.startsWith('买') ? 'bid' : 'ask'"
+            >
+              <span class="sum-level-name">{{ item.level }}</span>
+              <b class="num">{{ formatVol(item.volume) }}</b>
+              <span class="sum-level-count">{{ item.number || '--' }}单</span>
+            </div>
+          </div>
+          <div class="sum-flows">
+            <div
+              v-for="row in tradeData"
+              :key="row.level"
+              class="sum-flow"
+              :class="row.level.startsWith('买') ? 'bid' : 'ask'"
+            >
+              <span class="sum-flow-name">{{ row.level.replace('新增', '') }}</span>
+              <b class="num">{{ formatVol(row.last_3s) }}</b>
+              <span class="sum-flow-win">/3s</span>
+              <b class="num">{{ formatVol(row.last_1min) }}</b>
+              <span class="sum-flow-win">/1min</span>
+            </div>
+          </div>
         </div>
       </div>
-      <div class="data-ul">
-        <div class="data-li" v-show="showAsk">
-          <VolumeDataTable
-            :data="volumeData['ask2']?.data?.[0]?.[0] || {}"
-            :derection="
-              volumeData['ask2_price']
-                ? '  卖二价：' + (volumeData['ask2_price'] / 10000).toFixed(volumeData.is_ETF ? 3 : 2)
-                : '  卖二价：'
-            "
-            :is-fullscreen="askIsFullscreen"
-            :search-value="searchValue"
-            :locked-order-ids="lockedOrderIds"
-            @update-fullscreen="showHideTable"
-          />
+
+      <!-- ③ 右侧图表区（仅图表，第 5 步接入） -->
+      <div class="ov-chart-area">
+        <div class="chart-card">
+          <div class="chart-card-title">Q-t 窗口图</div>
+          <div class="chart-placeholder">时间窗口 × 量指标（买一/卖一 挂单·撤单·成交），第 5 步接入</div>
         </div>
-        <div class="data-li" v-show="showBid">
-          <VolumeDataTable
-            :data="volumeData['bid2']?.data?.[0]?.[0] || {}"
-            :derection="
-              volumeData['bid2_price']
-                ? '  买二价：' + (volumeData['bid2_price'] / 10000).toFixed(volumeData.is_ETF ? 3 : 2)
-                : '  买二价：'
-            "
-            :is-fullscreen="bidIsFullscreen"
-            :search-value="searchValue"
-            :locked-order-ids="lockedOrderIds"
-            @update-fullscreen="showHideTable"
-          />
-        </div>
-      </div>
-      <div class="data-ul">
-        <div class="data-li" v-show="showAsk">
-          <VolumeDataTable
-            :data="volumeData['ask3']?.data?.[0]?.[0] || {}"
-            :derection="
-              volumeData['ask3_price']
-                ? '  卖三价：' + (volumeData['ask3_price'] / 10000).toFixed(volumeData.is_ETF ? 3 : 2)
-                : '  卖三价：'
-            "
-            :is-fullscreen="askIsFullscreen"
-            :search-value="searchValue"
-            :locked-order-ids="lockedOrderIds"
-            @update-fullscreen="showHideTable"
-          />
-        </div>
-        <div class="data-li" v-show="showBid">
-          <VolumeDataTable
-            :data="volumeData['bid3']?.data?.[0]?.[0] || {}"
-            :derection="
-              volumeData['bid3_price']
-                ? '  买三价：' + (volumeData['bid3_price'] / 10000).toFixed(volumeData.is_ETF ? 3 : 2)
-                : '  买三价：'
-            "
-            :is-fullscreen="bidIsFullscreen"
-            :search-value="searchValue"
-            :locked-order-ids="lockedOrderIds"
-            @update-fullscreen="showHideTable"
-          />
+        <div v-if="lockedOrderIds.length" class="chart-card">
+          <div class="chart-card-title">锁定订单图表</div>
+          <div class="chart-placeholder">身前量 / 身后量 随时间变化，第 5 步接入</div>
         </div>
       </div>
     </div>
@@ -381,7 +269,7 @@
     import { ref, computed, onMounted, onUnmounted, watch, h, nextTick } from 'vue';
     import { useRoute, useRouter } from 'vue-router';
     import { uploadFile, getListObjectFile, getObjectDownloadFile } from '../../services/minioService';
-    import { Table, Empty, Spin, Radio, Button, Select, Input, Tooltip, Progress  } from 'ant-design-vue';
+    import { Table, Empty, Spin, Radio, Button, Select, Input, Tooltip, Progress, Switch  } from 'ant-design-vue';
   import { QuestionCircleOutlined } from '@ant-design/icons-vue';
     import { getSymList, getDateList, getVolumeData, getDatetimeList, getVolumeDataByTime, getSnapshotById, getSnapshotByIndex, getSnapshotByTime, getPastTimeTradeInfo, getNextChange, initTradeBook, getProgress, checkServerStatus } from '/@/api/orderbook/orderbook';
 
@@ -1088,6 +976,74 @@
     const isButtonDisabled = computed(() => {
       return Object.keys(volumeData.value).length === 0;
     });
+
+    // ==================== 第 4 步：布局与视觉重构新增状态 ====================
+
+    // A1 步进颗粒度选择器
+    const smallStepMs = ref(30);
+    const smallStepOptions = [
+      { value: 10, label: '小步 10ms' },
+      { value: 30, label: '小步 30ms' },
+      { value: 100, label: '小步 100ms' },
+    ];
+    const bigStepMs = ref(1000);
+    const bigStepOptions = [
+      { value: 500, label: '大步 500ms' },
+      { value: 1000, label: '大步 1s' },
+      { value: 3000, label: '大步 3s' },
+      { value: 10000, label: '大步 10s' },
+      { value: 60000, label: '大步 1min' },
+    ];
+    const orderStep = ref(1);
+    const orderStepOptions = [
+      { value: 1, label: '±1 订单' },
+      { value: 50, label: '±50 订单' },
+      { value: 100, label: '±100 订单' },
+      { value: 500, label: '±500 订单' },
+    ];
+
+    // 队列格子列数（买左卖右布局下每档 6 列，全屏时 VolumeTable 固定 24 列）
+    const queueCols = 6;
+
+    // 买一卖一价差展示
+    const spreadText = computed(() => {
+      const a = volumeData.value?.ask1_price;
+      const b = volumeData.value?.bid1_price;
+      if (!a || !b) return '--';
+      return ((a - b) / 10000).toFixed(volumeData.value.is_ETF ? 3 : 2);
+    });
+
+    // 汇总指标行数字格式化
+    const formatVol = (v) => {
+      if (v === '' || v === null || v === undefined) return '--';
+      const n = Number(v);
+      return Number.isFinite(n) ? n.toLocaleString('zh-CN') : String(v);
+    };
+
+    // D1 暗色主题（可选，浅色默认；跨刷新保留偏好）
+    const darkMode = ref(localStorage.getItem('ov_theme') === 'dark');
+    watch(darkMode, (v) => {
+      localStorage.setItem('ov_theme', v ? 'dark' : 'light');
+    });
+
+    // A4 快捷键：←/→ 小步，Shift+←/→ 大步，Ctrl(Alt)+←/→ 订单步进
+    const handleKeydown = (e) => {
+      const tag = (e.target?.tagName || '').toLowerCase();
+      if (tag === 'input' || tag === 'textarea' || tag === 'select' || e.target?.isContentEditable) return;
+      if (isButtonDisabled.value) return;
+      if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+      e.preventDefault();
+      const dir = e.key === 'ArrowLeft' ? -1 : 1;
+      if (e.shiftKey) {
+        moveTimes(dir * bigStepMs.value);
+      } else if (e.ctrlKey || e.altKey) {
+        moveticks(dir * orderStep.value);
+      } else {
+        moveTimes(dir * smallStepMs.value);
+      }
+    };
+    onMounted(() => window.addEventListener('keydown', handleKeydown));
+    onUnmounted(() => window.removeEventListener('keydown', handleKeydown));
 
     const handleSecurityTypeChange = (type) => {
       securityType.value = type;
@@ -3135,6 +3091,246 @@
     };
 </script>
 <style lang="less" scoped>
+  // ==================== 第 4 步：新布局样式 ====================
+  .ov-page {
+    margin: 8px;
+    overflow: hidden;
+    background: #fff;
+
+    // D2 等宽数字：页面内所有 .num 数字
+    .num {
+      font-variant-numeric: tabular-nums;
+      font-feature-settings: 'tnum';
+    }
+  }
+
+  // ① 顶栏（两行）
+  .ov-topbar {
+    border: 1px solid #e8eef5;
+    border-radius: 6px;
+    background: #fbfcfe;
+    padding: 6px 10px;
+    margin-bottom: 8px;
+  }
+
+  .ov-topbar-row {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 6px 16px;
+    min-height: 36px;
+
+    &.controls {
+      border-top: 1px dashed #edf1f7;
+      padding-top: 6px;
+      margin-top: 6px;
+    }
+  }
+
+  .ov-bar-group {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+
+    .group-label {
+      color: #425466;
+      font-size: 12px;
+      font-weight: 600;
+      white-space: nowrap;
+    }
+  }
+
+  .ov-select {
+    &.w-type { width: 90px; }
+    &.w-sym { width: 130px; }
+    &.w-date { width: 140px; }
+    &.w-step { width: 104px; }
+  }
+
+  .ov-time-input { width: 120px; }
+  .ov-lock-input { width: 76px; &.w-id { width: 110px; } }
+
+  .ov-bar-status {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 4px 18px;
+    margin-left: auto;
+    color: #667085;
+    font-size: 12px;
+
+    .status-item b {
+      color: #1d2939;
+      font-weight: 600;
+      margin-left: 2px;
+    }
+
+    .status-item.time b {
+      color: #096dd9;
+    }
+
+    .theme-toggle {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+  }
+
+  // 主体左右分栏：左数据区 55% / 右图表区 45%
+  .ov-body {
+    display: flex;
+    gap: 8px;
+    align-items: flex-start;
+  }
+
+  .ov-data-area {
+    flex: 0 0 55%;
+    min-width: 0;
+  }
+
+  .ov-chart-area {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .chart-card {
+    border: 1px solid #e8eef5;
+    border-radius: 6px;
+    background: #fbfcfe;
+    min-height: 220px;
+    padding: 8px 10px;
+  }
+
+  .chart-card-title {
+    color: #425466;
+    font-size: 12px;
+    font-weight: 600;
+    margin-bottom: 6px;
+  }
+
+  .chart-placeholder {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 180px;
+    color: #98a2b3;
+    font-size: 12px;
+    border: 1px dashed #d9e2ec;
+    border-radius: 4px;
+  }
+
+  // ② 队列区：买左卖右，档内 3 在左/右外侧、1 靠中间
+  .ov-queue-zones {
+    display: flex;
+    gap: 8px;
+  }
+
+  .ov-zone {
+    flex: 1;
+    min-width: 0;
+  }
+
+  // ③ 汇总指标行
+  .ov-summary-strip {
+    margin-top: 8px;
+    border: 1px solid #e8eef5;
+    border-radius: 6px;
+    background: #fbfcfe;
+    padding: 6px 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .sum-levels,
+  .sum-flows {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 14px;
+  }
+
+  .sum-level,
+  .sum-flow {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 4px;
+    font-size: 12px;
+    color: #667085;
+
+    b {
+      font-size: 12px;
+      font-weight: 600;
+    }
+  }
+
+  .sum-level.bid b { color: #f5222d; }
+  .sum-level.ask b { color: #52c41a; }
+  .sum-flow.bid b { color: #f5222d; }
+  .sum-flow.ask b { color: #52c41a; }
+
+  .sum-level-name,
+  .sum-flow-name {
+    color: #425466;
+    font-weight: 600;
+  }
+
+  .sum-level-count,
+  .sum-flow-win {
+    color: #98a2b3;
+    font-size: 11px;
+  }
+
+  // 窄屏：图表区收到底部
+  @media (max-width: 1440px) {
+    .ov-body {
+      flex-direction: column;
+    }
+
+    .ov-data-area,
+    .ov-chart-area {
+      flex: 1 1 auto;
+      width: 100%;
+    }
+  }
+
+  // D1 暗色主题（可选）
+  .ov-page.ov-dark {
+    background: #14181f;
+
+    .ov-topbar,
+    .chart-card,
+    .ov-summary-strip {
+      border-color: #2c3342;
+      background: #1b212c;
+    }
+
+    .ov-topbar-row.controls {
+      border-top-color: #2c3342;
+    }
+
+    .chart-card-title,
+    .group-label,
+    .sum-level-name,
+    .sum-flow-name {
+      color: #aab4c5;
+    }
+
+    .chart-placeholder {
+      border-color: #2c3342;
+      color: #5d6778;
+    }
+
+    .ov-bar-status {
+      color: #8b95a7;
+
+      .status-item b { color: #e2e8f2; }
+      .status-item.time b { color: #69b1ff; }
+    }
+  }
+
   .filter-mode {
     padding: 4px 8px;
     display: flex;

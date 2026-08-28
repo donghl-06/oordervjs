@@ -47,7 +47,11 @@
       </div>
     </div>
     <div class="table-container">
-      <div class="volume-grid" :class="{ fullscreen: isFullscreen }">
+      <div
+        class="volume-grid"
+        :class="{ fullscreen: isFullscreen }"
+        :style="{ gridTemplateColumns: `repeat(${isFullscreen ? 24 : cols}, 1fr)` }"
+      >
         <Tooltip
           v-for="(order, index) in ordersData"
           :key="index"
@@ -57,7 +61,11 @@
           :mouseLeaveDelay="0"
           placement="top"
         >
-          <div class="volume-cell" :class="{ highlighted: isHighlighted(order) }">
+          <div
+            class="volume-cell"
+            :class="{ highlighted: isHighlighted(order) }"
+            :style="getCellStyle(order)"
+          >
             {{ order.remaining_volume || '' }}
           </div>
         </Tooltip>
@@ -94,6 +102,11 @@
     showTooltip: {
       type: Boolean,
       default: false,
+    },
+    // 普通模式下的网格列数（全屏时固定 24 列）
+    cols: {
+      type: Number,
+      default: 12,
     },
   });
 
@@ -151,6 +164,26 @@
   const isHighlighted = (order) => {
     if (!order || !order.order_local_id) return false;
     return lockedIdSet.value.has(String(order.order_local_id));
+  };
+
+  // D3 热力梯度：格子底色深度 ∝ 订单量 / 当前档位最大单量
+  const maxCellVolume = computed(() => {
+    let max = 0;
+    for (const order of ordersData.value) {
+      const v = Number(order.remaining_volume);
+      if (Number.isFinite(v) && v > max) max = v;
+    }
+    return max;
+  });
+
+  const getCellStyle = (order) => {
+    const v = Number(order?.remaining_volume);
+    if (!Number.isFinite(v) || v <= 0 || maxCellVolume.value <= 0) return {};
+    const intensity = v / maxCellVolume.value;
+    const alpha = (0.06 + 0.42 * intensity).toFixed(3);
+    // 买=红 卖=绿（A 股惯例，与方向标签配色一致）
+    const rgb = props.derection?.includes('卖') ? '82, 196, 26' : '245, 34, 45';
+    return { backgroundColor: `rgba(${rgb}, ${alpha})` };
   };
 
   // 获取订单详细信息的提示文本
@@ -433,14 +466,10 @@
 
     .volume-grid {
       display: grid;
-      grid-template-columns: repeat(12, 1fr); /* 固定12列 */
+      /* 列数由模板内联样式控制（cols prop / 全屏24列） */
       gap: 0px; /* 移除间隙 */
       width: 100%;
       padding: 0px; /* 移除内边距 */
-    }
-
-    .volume-grid.fullscreen {
-      grid-template-columns: repeat(24, 1fr); /* 全屏时固定24列 */
     }
 
     .volume-cell {
@@ -449,6 +478,7 @@
       justify-content: center;
       height: 40px; /* 固定高度，确保4行正好填满容器 */
       font-size: 11px;
+      font-variant-numeric: tabular-nums; /* D2 等宽数字 */
       border: 1px solid #d9d9d9;
       background-color: #fafafa;
       text-align: center;
@@ -456,11 +486,29 @@
       word-break: break-all;
       overflow: hidden;
       margin: 0px; /* 确保没有外边距 */
+      transition: background-color 0.25s ease; /* D3 量变化时底色平滑过渡 */
     }
 
     .volume-cell.highlighted {
       background-color: #000000 !important;
       color: #ffffff !important;
+    }
+
+    // D1 暗色主题（.ov-dark 挂在页面根节点）
+    .ov-dark .table-container {
+      border-color: #3a3f4b;
+      background-color: #1f2430;
+    }
+
+    .ov-dark .volume-cell {
+      border-color: #3a3f4b;
+      background-color: #242a38;
+      color: #d5dbe7;
+    }
+
+    .ov-dark .volume-cell.highlighted {
+      background-color: #f0c674 !important;
+      color: #1f2430 !important;
     }
   }
 
