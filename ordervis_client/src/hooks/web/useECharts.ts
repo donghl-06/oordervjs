@@ -1,5 +1,5 @@
 import type { EChartsOption } from 'echarts';
-import type { Ref } from 'vue';
+import type { Ref, MaybeRef } from 'vue';
 import { useTimeoutFn } from '/@/hooks/core/useTimeout';
 import { tryOnUnmounted } from '@vueuse/core';
 import { unref, nextTick, watch, computed, ref } from 'vue';
@@ -11,12 +11,14 @@ import { useRootSetting } from '/@/hooks/setting/useRootSetting';
 
 export function useECharts(
   elRef: Ref<HTMLDivElement>,
-  theme: 'light' | 'dark' | 'default' = 'default',
+  theme: MaybeRef<'light' | 'dark' | 'default'> = 'default',
 ) {
   const { getDarkMode: getSysDarkMode } = useRootSetting();
 
+  // theme 支持传入 ref/computed（如业务页自己的暗色开关），切换时自动重建图表
   const getDarkMode = computed(() => {
-    return theme === 'default' ? getSysDarkMode.value : theme;
+    const t = unref(theme);
+    return t === 'default' ? getSysDarkMode.value : t;
   });
   let chartInstance: echarts.ECharts | null = null;
   let resizeFn: Fn = resize;
@@ -35,7 +37,7 @@ export function useECharts(
     } as EChartsOption;
   });
 
-  function initCharts(t = theme) {
+  function initCharts(t = unref(theme)) {
     const el = unref(elRef);
     if (!el || !unref(el)) {
       return;

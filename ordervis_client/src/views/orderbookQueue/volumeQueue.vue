@@ -241,16 +241,26 @@
         </div>
       </div>
 
-      <!-- ③ 右侧图表区（仅图表，第 5 步接入） -->
+      <!-- ③ 右侧图表区（仅图表） -->
       <div class="ov-chart-area">
-        <div class="chart-card">
-          <div class="chart-card-title">Q-t 窗口图</div>
-          <div class="chart-placeholder">时间窗口 × 量指标（买一/卖一 挂单·撤单·成交），第 5 步接入</div>
-        </div>
-        <div v-if="lockedOrderIds.length" class="chart-card">
-          <div class="chart-card-title">锁定订单图表</div>
-          <div class="chart-placeholder">身前量 / 身后量 随时间变化，第 5 步接入</div>
-        </div>
+        <TradeFlowChart
+          :sym="selectSym"
+          :date="selectDate"
+          :current-time="selectTime"
+          :ready="!isButtonDisabled"
+          :dark="darkMode"
+          @seek="handleChartSeek"
+        />
+        <LockedOrderChart
+          v-if="lockedOrderIds.length"
+          :sym="selectSym"
+          :date="selectDate"
+          :locked-ids="lockedOrderIds"
+          :volume-data="volumeData"
+          :current-time="selectTime"
+          :dark="darkMode"
+          @seek="handleChartSeek"
+        />
       </div>
     </div>
 
@@ -282,6 +292,9 @@
     };
     import VolumeDataTable from './components/VolumeTable.vue'
     import LockOrderSelector from './components/LockOrderSelector.vue'
+    import TradeFlowChart from './components/TradeFlowChart.vue'
+    import LockedOrderChart from './components/LockedOrderChart.vue'
+    import { useSnapshotNavigation } from './composables/useSnapshotNavigation';
     import { useMessage } from '/@/hooks/web/useMessage';
     import { createProgressListener } from '/@/utils/websocket';
     import { useOrderLockStore } from '/@/store/orderLock';
@@ -305,14 +318,19 @@
     const isETF = ref(false);
     const { createMessage } = useMessage();
 
-    // 从localStorage恢复orderIndex，如果没有则默认为0
-    const orderIndex = ref(parseInt(localStorage.getItem('volumeQueue_orderIndex')) || 0);
-
-    // 存储API返回的change_index
-    const changeIndex = ref(0);
-
-    // 存储API返回的snapshot_id
-    const snapshotId = ref(0);
+    // 快照导航状态（第 5 步抽取）：「当前时刻」唯一状态源，图表区只读跟随
+    const {
+      selectTime,
+      changeIndex,
+      orderIndex,
+      snapshotId,
+      displayTime,
+      parseTimeToMs,
+      formatMsToTimeStr,
+      extractTimeFromTimestamp,
+      isValidTimeFormat,
+      checkTimeBoundary,
+    } = useSnapshotNavigation();
 
     const securityType = ref(localStorage.getItem('volumeQueue_securityType') || 'stock');
     const selectSym = ref('');
@@ -504,88 +522,8 @@
       });
     });
 
-    // 从localStorage恢复selectTime，只有在来自GlobalOrderSearch的跳转时才恢复
-    // 否则默认为空字符串，确保用户关闭页面重新进入时时间为空
-    const isFromGlobalSearch = localStorage.getItem('globalSearch_orderId') && localStorage.getItem('triggerLockOrder');
-    const selectTime = ref(isFromGlobalSearch ? (localStorage.getItem('volumeQueue_timestamp') || '') : '');
-
-    // 格式化时间戳，只显示时分秒
-    const formatTimeDisplay = (timestamp) => {
-      if (!timestamp) return '';
-      // 如果时间戳包含日期部分，提取时分秒部分
-      if (timestamp.includes(' ')) {
-        return timestamp.split(' ')[1]; // 取空格后的时间部分
-      }
-      // 如果已经是时分秒格式，直接返回
-      return timestamp;
-    };
-
-    // 计算属性：用于显示的时间戳（只显示时分秒）
-    const displayTime = computed({
-      get: () => formatTimeDisplay(selectTime.value),
-      set: (value) => {
-        // 放宽：输入时不做边界检测，直接存入原始值
-        selectTime.value = value;
-      }
-    });
-
     // 处理时间输入变化
     
-    // 时间格式验证函数
-    const isValidTimeFormat = (timeStr) => {
-      if (!timeStr) return false;
-      
-      // 支持多种时间格式：
-      // HH:MM:SS.mmm (09:30:00.000)
-      // HH:MM:SS (09:30:00)
-      // H:MM:SS (9:30:00)
-      const timeRegex = /^([0-1]?[0-9]|2[0-3]):([0-5][0-9]):([0-5][0-9])(\.\d{1,3})?$/;
-      return timeRegex.test(timeStr);
-    };
-    
-    // 时间边界检查函数（使用 Date 对象进行准确比较）
-    const checkTimeBoundary = (timeStr) => {
-      const minTime = '09:30:00.000';
-      const maxTime = '15:00:00.000';
-      
-      // 先验证格式
-      if (!isValidTimeFormat(timeStr)) {
-        console.warn('⚠️ 时间格式无效:', timeStr);
-        return { valid: false, corrected: minTime, reason: 'format' };
-      }
-      
-      // 使用 Date 对象进行准确的时间比较
-      const baseDate = '2000-01-01 ';
-      try {
-        const inputTime = new Date(baseDate + timeStr);
-        const minDateTime = new Date(baseDate + minTime);
-        const maxDateTime = new Date(baseDate + maxTime);
-        
-        // 检查是否为有效的 Date 对象
-        if (isNaN(inputTime.getTime())) {
-          console.warn('⚠️ 无法解析时间:', timeStr);
-          return { valid: false, corrected: minTime, reason: 'parse' };
-        }
-        
-        // 如果输入时间小于最早时间，返回最早时间
-        if (inputTime < minDateTime) {
-          console.warn('⚠️ 时间早于开盘时间:', timeStr);
-          return { valid: false, corrected: minTime, reason: 'early' };
-        }
-        
-        // 如果输入时间大于最晚时间，返回最晚时间
-        if (inputTime > maxDateTime) {
-          console.warn('⚠️ 时间晚于收盘时间:', timeStr);
-          return { valid: false, corrected: maxTime, reason: 'late' };
-        }
-        
-        // 时间在范围内，返回原时间
-        return { valid: true, corrected: timeStr, reason: null };
-      } catch (error) {
-        console.error('❌ 时间边界检查异常:', error);
-        return { valid: false, corrected: minTime, reason: 'error' };
-      }
-    };
 
     const handleTimeInputChange = (e) => {
       const inputValue = e.target.value;
@@ -636,15 +574,6 @@
       localStorage.setItem('volumeQueue_timestamp', selectTime.value || '');
     };
     
-    // 监听selectTime变化并持久化到localStorage
-    watch(selectTime, (newValue) => {
-      localStorage.setItem('volumeQueue_timestamp', newValue || '');
-    });
-
-    // 监听orderIndex变化并持久化到localStorage
-    watch(orderIndex, (newValue) => {
-      localStorage.setItem('volumeQueue_orderIndex', (newValue || '').toString());
-    });
     
     const timesData = ref([]);
 
@@ -1285,6 +1214,14 @@
       return processVolumeData(inputTime, false, false, true);
     }
 
+    // 图↔格联动：图表（C2/C5）点击某点 → 统一走 clickMoveTime 跳转到该时刻
+    // 与顶栏「跳转」按钮同一条路径，保证所有导航入口行为一致（修改计划.md D6）
+    const handleChartSeek = (timeStr) => {
+      if (!timeStr) return;
+      selectTime.value = timeStr;
+      clickMoveTime(timeStr);
+    };
+
     // 将档位 orders 数组转换为 VolumeTable 表格数据格式（共享实现，
     // 供 processVolumeData / updateVolumeDataFromSnapshot / moveticks 使用）
     const transformOrdersToTableData = (orders, levelPrice) => {
@@ -1676,48 +1613,6 @@
         loading.value = false;
       }
     }
-
-    // 辅助函数：将时间字符串转换为毫秒
-    const parseTimeToMs = (timeStr) => {
-      if (!timeStr) return 0;
-      const [hours, minutes, seconds] = timeStr.split(':');
-      const [sec, ms] = seconds.split('.');
-      return parseInt(hours) * 3600000 + parseInt(minutes) * 60000 + parseInt(sec) * 1000 + parseInt(ms || 0);
-    }
-
-    // 辅助函数：将毫秒转换为 HH:mm:ss.SSS 格式
-    const formatMsToTimeStr = (msValue) => {
-      const h = Math.floor(msValue / 3600000);
-      const m = Math.floor((msValue % 3600000) / 60000);
-      const s = Math.floor((msValue % 60000) / 1000);
-      const mm = msValue % 1000;
-      return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}.${mm.toString().padStart(3, '0')}`;
-    }
-
-    // 辅助函数：从完整时间戳中提取时间部分（HH:mm:ss.SSS格式）
-    const extractTimeFromTimestamp = (timestamp) => {
-      if (!timestamp) return '';
-      // 如果已经是时间格式（HH:mm:ss.SSS），直接返回
-      if (timestamp.match(/^\d{2}:\d{2}:\d{2}\.\d{3}$/)) {
-        return timestamp;
-      }
-      // 如果包含日期（如：2025-08-01 09:30:00.050），提取时间部分
-      if (timestamp.includes(' ')) {
-        return timestamp.split(' ')[1] || '';
-      }
-      // 其他情况直接返回
-      return timestamp;
-    }
-
-    // 辅助函数：将Date对象格式化为HH:mm:ss.SSS格式，保持毫秒精度
-    const formatTimeWithMilliseconds = (date) => {
-      const hours = date.getHours().toString().padStart(2, '0');
-      const minutes = date.getMinutes().toString().padStart(2, '0');
-      const seconds = date.getSeconds().toString().padStart(2, '0');
-      const milliseconds = date.getMilliseconds().toString().padStart(3, '0');
-      return `${hours}:${minutes}:${seconds}.${milliseconds}`;
-    }
-
 
 
     // 辅助函数：从snapshot更新volumeData（提取公共逻辑）
