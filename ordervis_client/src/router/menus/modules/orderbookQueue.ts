@@ -10,10 +10,6 @@ const menu: MenuModule = {
         name: '交易量队列',
         path: 'volumeQueue',
       },
-      // {
-      //   name: '数据生成',
-      //   path: 'ordersDataGenerate',
-      // },
     ],
   },
 };

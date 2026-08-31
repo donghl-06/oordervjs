@@ -25,16 +25,6 @@ const dataView: AppRouteModule = {
         ignoreAuth: true,
       },
     },
-    {
-      path: 'ordersDataGenerate',
-      name: 'ordersDataGeneratePage',
-      component: () => import('/@/views/orderbookQueue/ordersDataGenerate.vue'),
-      meta: {
-        title: '数据生成',
-        icon: 'simple-icons:about-dot-me',
-        ignoreAuth: true,
-      },
-    },
   ],
 };
 
