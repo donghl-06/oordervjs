@@ -253,11 +253,9 @@ class TradeBook:
                    'bid_volume': ..., 'ask_volume': ...}, ...]
         注：
         - create/traded 用引擎计数器差分；cancel 引擎计数器恒0，用 CSV 修补（见 _best_level_cancel_volumes）。
-        - bid_volume/ask_volume = 该桶右缘时刻买一/卖一盘口累计等待量（状态量，非差分）。
-          实现：锚定窗口右缘 query_by_time 快照的一档真实 total_volume，
-          按实测口径「Δ一档量 = Δcreate − Δtraded」用 market_data 计数器向前回溯
-          （避免 61 次 26.6ms 的 query_by_time；实测逐点误差为 0，撤单已由引擎
-          在档位总量中自洽处理，不能再叠加 CSV 修补项），做 max(0) 钳制。
+        - bid_volume/ask_volume = 该桶右缘时刻真实买一/卖一盘口累计等待量（状态量，非差分）。
+          最优价会在窗口内变化，不能用右缘档位和累计计数器反推历史一档量；因此逐采样点
+          查询完整快照，保证每个图上时刻都取该时刻实际买一/卖一的 total_volume。
         """
         self.update_access_time()
         end_ms = _time_to_ms(time_str)
@@ -278,25 +276,15 @@ class TradeBook:
             idx = min(max(idx, 0), points - 1)
             bucket_cancel[idx][rec['side']] += rec['volume']
 
-        # ---- 一档盘口等待量回溯：锚定右缘快照真实值 ----
-        # 实测（000027.SZ 含撤单密集窗口）：纯计数器回溯与 query_by_time 真值逐点一致（误差 0），
-        # 引擎档位总量对撤单的处理与 CSV 价格匹配口径不一致，故此处不加撤单修补项。
-        anchor = self.visualizer.query_by_time(self.date, time_str) or {}
-        anchor_levels = anchor.get('levels') or {}
-        anchor_md = anchor.get('market_data') or {}
-        anchor_bid_vol = (anchor_levels.get('bid1') or {}).get('total_volume')
-        anchor_ask_vol = (anchor_levels.get('ask1') or {}).get('total_volume')
+        # 一档状态量必须按采样时刻读取真实快照。累计计数器只描述流量，最优价切档后
+        # 无法从窗口右缘的一档反推出历史时刻的“一档”，此前的反推会产生伪 0。
+        level_snapshots = [self.visualizer.query_by_time(self.date, t) or {} for t in sample_times[1:]]
 
-        def _level_volume(i, side):
-            """采样点 i 时刻的一档盘口等待量（回溯估算，钳制非负）"""
-            anchor_vol = anchor_bid_vol if side == 'bid' else anchor_ask_vol
-            if anchor_vol is None:
-                return None
-            cur = snapshots[i].get('market_data') or {}
-            c_key, t_key = f'{side}_create_count', f'{side}_traded_count'
-            dc = (anchor_md.get(c_key) or 0) - (cur.get(c_key) or 0)
-            dt = (anchor_md.get(t_key) or 0) - (cur.get(t_key) or 0)
-            return max(0.0, anchor_vol - dc + dt)
+        def _level_volume(bucket_index, side):
+            levels = level_snapshots[bucket_index].get('levels') or {}
+            level = levels.get(f'{side}1') or {}
+            volume = level.get('total_volume')
+            return float(volume) if volume is not None else None
 
         series = []
         for i in range(points):
@@ -312,8 +300,8 @@ class TradeBook:
                 'ask_cancel': bucket_cancel[i]['ask'],
                 'ask_traded': (cur.get('ask_traded_count') or 0) - (prev.get('ask_traded_count') or 0),
                 # 桶右缘时刻的一档累计挂单量（盘口等待量）
-                'bid_volume': _level_volume(i + 1, 'bid'),
-                'ask_volume': _level_volume(i + 1, 'ask'),
+                'bid_volume': _level_volume(i, 'bid'),
+                'ask_volume': _level_volume(i, 'ask'),
             })
         return series
 

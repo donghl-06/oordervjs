@@ -1,6 +1,6 @@
 <template>
   <Modal
-    :visible="visible"
+    :visible="localVisible"
     title="选择要锁定的订单"
     width="860px"
     :confirm-loading="false"
@@ -10,6 +10,7 @@
     centered
     @ok="handleConfirm"
     @cancel="handleCancel"
+    @update:visible="handleVisibleChange"
   >
     <!-- 按下单时间定位入口 -->
     <div class="locate-bar">
@@ -74,7 +75,7 @@
 </template>
 
 <script lang="js" setup>
-  import { ref, computed, reactive } from 'vue';
+  import { ref, computed, reactive, watch } from 'vue';
   import { Modal, Table, Input, InputNumber, Radio, RadioGroup, Button } from 'ant-design-vue';
   import { findOrder } from '/@/api/orderbook/orderbook';
   import { useMessage } from '/@/hooks/web/useMessage';
@@ -88,10 +89,11 @@
     isEtf: { type: Boolean, default: false },
   });
 
-  const emit = defineEmits(['update:visible', 'confirm']);
+  const emit = defineEmits(['update:visible', 'close', 'confirm']);
   const { createMessage } = useMessage();
 
   const selectedKeys = ref([]);
+  const localVisible = ref(props.visible);
   const highlightedId = ref('');
   const locating = ref(false);
   const locateForm = reactive({
@@ -103,6 +105,13 @@
 
   const pricePrecision = computed(() => (props.isEtf ? 3 : 2));
   const priceStep = computed(() => (props.isEtf ? 0.001 : 0.01));
+
+  watch(
+    () => props.visible,
+    (visible) => {
+      localVisible.value = visible;
+    },
+  );
 
   const columns = [
     { title: '订单ID', dataIndex: 'order_local_id', width: 110 },
@@ -188,12 +197,18 @@
   };
 
   const handleCancel = () => {
-    emit('update:visible', false);
     resetState();
   };
 
+  const handleVisibleChange = (visible) => {
+    if (!visible) resetState();
+  };
+
   const resetState = () => {
+    // 先改本地状态，避免父组件更新延迟或异常时 Modal 保持可见。
+    localVisible.value = false;
     emit('update:visible', false);
+    emit('close');
     selectedKeys.value = [];
     highlightedId.value = '';
   };

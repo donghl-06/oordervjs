@@ -127,16 +127,17 @@
         <div class="ov-queue-zones">
           <div v-show="showBid" class="ov-zone bid-zone">
             <VolumeDataTable
-              :data="volumeData['bid3']?.data?.[0]?.[0] || {}"
+              :data="volumeData['bid1']?.data?.[0]?.[0] || {}"
               :derection="
-                volumeData['bid3_price']
-                  ? '  买三价：' + (volumeData['bid3_price'] / 10000).toFixed(volumeData.is_ETF ? 3 : 2)
-                  : '  买三价：'
+                volumeData['bid1_price']
+                  ? '  买一价：' + (volumeData['bid1_price'] / 10000).toFixed(volumeData.is_ETF ? 3 : 2)
+                  : '  买一价：'
               "
               :is-fullscreen="bidIsFullscreen"
               :search-value="searchValue"
               :locked-order-ids="lockedOrderIds"
               :cols="queueCols"
+              :show-tooltip="true"
               @update-fullscreen="showHideTable"
             />
             <VolumeDataTable
@@ -153,17 +154,16 @@
               @update-fullscreen="showHideTable"
             />
             <VolumeDataTable
-              :data="volumeData['bid1']?.data?.[0]?.[0] || {}"
+              :data="volumeData['bid3']?.data?.[0]?.[0] || {}"
               :derection="
-                volumeData['bid1_price']
-                  ? '  买一价：' + (volumeData['bid1_price'] / 10000).toFixed(volumeData.is_ETF ? 3 : 2)
-                  : '  买一价：'
+                volumeData['bid3_price']
+                  ? '  买三价：' + (volumeData['bid3_price'] / 10000).toFixed(volumeData.is_ETF ? 3 : 2)
+                  : '  买三价：'
               "
               :is-fullscreen="bidIsFullscreen"
               :search-value="searchValue"
               :locked-order-ids="lockedOrderIds"
               :cols="queueCols"
-              :show-tooltip="true"
               @update-fullscreen="showHideTable"
             />
           </div>
@@ -265,11 +265,13 @@
     </div>
 
     <LockOrderSelector
-      v-model:visible="lockSelectorVisible"
+      v-if="lockSelectorVisible"
+      :visible="lockSelectorVisible"
       :candidates="lockCandidates"
       :sym="selectSym"
       :date="selectDate"
       :is-etf="isETF"
+      @close="lockSelectorVisible = false"
       @confirm="handleLockConfirm"
     />
   </div>
