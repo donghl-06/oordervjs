@@ -102,31 +102,47 @@
     return null;
   };
 
-  // 每来一个新快照（volumeData 整体替换），为每个锁定订单累计一个点
+  const recordCurrentSnapshot = () => {
+    if (!props.lockedIds.length || !props.currentTime) return;
+    const t = parseTimeToMs(props.currentTime);
+    if (!t) return;
+    for (const id of props.lockedIds) {
+      const pos = locateOrder(id);
+      if (!pos) continue;
+      const list = tracks.value[id] || (tracks.value[id] = []);
+      const last = list[list.length - 1];
+      if (last && last.t === t) {
+        last.ahead = pos.ahead;
+        last.behind = pos.behind;
+      } else {
+        list.push({ t, ahead: pos.ahead, behind: pos.behind });
+        if (list.length > MAX_POINTS) list.splice(0, list.length - MAX_POINTS);
+      }
+    }
+  };
+
+  // 必须定义在 immediate 监听器之前，避免组件首次挂载时访问未初始化的 const。
+  const fetchLifecycle = async (id) => {
+    if (!props.sym || !props.date) return;
+    try {
+      const res = await getOrderLifecycle({ sym: props.sym, date: props.date, order_id: id });
+      lifecycles.value[id] = res.code === 0 && res.data ? res.data : null;
+    } catch (e) {
+      lifecycles.value[id] = null;
+    }
+    renderChart();
+  };
+
+  // 每来一个新快照（volumeData 整体替换），为每个锁定订单累计一个点。
   watch(
     () => props.volumeData,
     () => {
-      if (!props.lockedIds.length || !props.currentTime) return;
-      const t = parseTimeToMs(props.currentTime);
-      if (!t) return;
-      for (const id of props.lockedIds) {
-        const pos = locateOrder(id);
-        if (!pos) continue;
-        const list = tracks.value[id] || (tracks.value[id] = []);
-        const last = list[list.length - 1];
-        if (last && last.t === t) {
-          last.ahead = pos.ahead; // 同一时刻重复到达（如原地步进）→ 覆盖而非追加
-          last.behind = pos.behind;
-        } else {
-          list.push({ t, ahead: pos.ahead, behind: pos.behind });
-          if (list.length > MAX_POINTS) list.splice(0, list.length - MAX_POINTS);
-        }
-      }
-      renderChart(); // 数据增量修改后显式重绘（renderChart 在下方定义，回调执行时已就绪）
+      recordCurrentSnapshot();
+      renderChart();
     },
   );
 
-  // 锁定集合变化：初始化新订单轨迹、清理解除锁定的订单、拉取 B4 生命周期
+  // 锁定集合变化：初始化新订单轨迹、清理解除锁定的订单、拉取 B4 生命周期。
   watch(
     () => [...props.lockedIds],
     (ids) => {
@@ -141,20 +157,14 @@
         if (!tracks.value[id]) tracks.value[id] = [];
         if (!(id in lifecycles.value)) fetchLifecycle(id);
       });
+      // 组件刚挂载时 volumeData 已存在，不会触发上面的监听；锁定当下立即记录首个点。
+      nextTick(() => {
+        recordCurrentSnapshot();
+        renderChart();
+      });
     },
     { immediate: true },
   );
-
-  const fetchLifecycle = async (id) => {
-    if (!props.sym || !props.date) return; // 标的不就绪时不取数，避免缓存错误的失败态
-    try {
-      const res = await getOrderLifecycle({ sym: props.sym, date: props.date, order_id: id });
-      lifecycles.value[id] = res.code === 0 && res.data ? res.data : null;
-    } catch (e) {
-      lifecycles.value[id] = null;
-    }
-    renderChart(); // 事件标记与摘要行到达后重绘
-  };
 
   // 换标的/换日期 → 本地累计与生命周期缓存全部作废
   watch(
