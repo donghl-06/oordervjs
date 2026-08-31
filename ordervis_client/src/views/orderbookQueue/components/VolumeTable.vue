@@ -187,11 +187,12 @@
   };
 
   // 获取订单详细信息的提示文本
+  // create_time 形如 "2025-08-01 09:34:30.240"，日期已在顶栏选定，悬停只显示时分秒毫秒
   const getOrderTooltip = (order) => {
     if (!order || typeof order !== 'object') return '';
 
     const orderId = order.order_local_id || order.order_id || '';
-    const createTime = order.create_time || '';
+    const createTime = (order.create_time || '').split(' ').pop() || '';
     const remainingVolume = order.remaining_volume || '';
 
     if (!orderId && !createTime && !remainingVolume) return '';

@@ -35,7 +35,9 @@
   /**
    * C2 Q-t 窗口图（修改计划.md）
    * 横轴 = 以当前时刻为右缘的滑动时间窗口（500ms/1s/3s/10s/1min 可选）
-   * 纵轴 = 量，指标可选（买一/卖一 × 新增挂单/撤单/成交量，最多双选叠加）
+   * 纵轴 = 量，指标可选（买一/卖一 × 挂单量/撤单/成交量，最多双选叠加）
+   *   挂单量 = 该时刻一档盘口累计等待量（状态量，后端锚点回溯）；
+   *   撤单/成交 = 桶内新增量（差分流量）
    * 竖游标 = 当前时刻（窗口右缘）；点击图上某点 → emit('seek', 该桶时间) 主区跳转
    */
   const props = defineProps({
@@ -60,21 +62,22 @@
   ];
 
   // 6 个指标，颜色与页面约定一致（买红卖绿，同侧三指标用明度区分）
+  // 挂单量 = 盘口累计等待量（bid_volume/ask_volume）；撤单/成交 = 桶内新增量
   const METRIC_DEFS = [
-    { key: 'bid_create', label: '买一挂单', color: '#f5222d' },
+    { key: 'bid_volume', label: '买一挂单量', color: '#f5222d' },
     { key: 'bid_cancel', label: '买一撤单', color: '#ff9c6e' },
     { key: 'bid_traded', label: '买一成交', color: '#a8071a' },
-    { key: 'ask_create', label: '卖一挂单', color: '#52c41a' },
+    { key: 'ask_volume', label: '卖一挂单量', color: '#52c41a' },
     { key: 'ask_cancel', label: '卖一撤单', color: '#95de64' },
     { key: 'ask_traded', label: '卖一成交', color: '#237804' },
   ];
   const metricOptions = METRIC_DEFS.map((m) => ({ value: m.key, label: m.label }));
-  const selectedMetrics = ref(['bid_create', 'ask_create']);
+  const selectedMetrics = ref(['bid_volume', 'ask_volume']);
 
   // 最多双选叠加：选中第 3 个时丢弃最早选中的
   const handleMetricsChange = (values) => {
     const next = values.length > 2 ? values.slice(values.length - 2) : values;
-    selectedMetrics.value = next.length ? next : ['bid_create'];
+    selectedMetrics.value = next.length ? next : ['bid_volume'];
   };
 
   const chartEl = ref(null);
@@ -146,7 +149,8 @@
         lineStyle: { width: 1.5 },
         itemStyle: { color: def.color },
         // 桶右缘时间作为 x 值（当日毫秒数，value 轴避免 echarts time 轴时区偏移）
-        data: list.map((b) => [parseTimeToMs(b.end), b[key] || 0]),
+        // 挂单量在锚点缺失时为 null → 折线自然断开而非误导性归零
+        data: list.map((b) => [parseTimeToMs(b.end), b[key] ?? null]),
       };
     });
 

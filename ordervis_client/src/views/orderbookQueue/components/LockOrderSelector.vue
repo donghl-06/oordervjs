@@ -58,7 +58,7 @@
           {{ formatPrice(record.price) }}
         </template>
         <template v-else-if="column.dataIndex === 'create_time'">
-          {{ record.create_time || '暂无数据' }}
+          {{ formatTimeOnly(record.create_time) }}
         </template>
         <template v-else-if="column.dataIndex === 'direction'">
           <span :style="{ color: record.direction === '买' ? '#f5222d' : '#52c41a' }">
@@ -129,6 +129,12 @@
     return (Number(price) / 10000).toFixed(pricePrecision.value);
   };
 
+  // 日期已在顶栏选定，列表只显示时分秒毫秒
+  const formatTimeOnly = (createTime) => {
+    if (!createTime) return '暂无数据';
+    return String(createTime).split(' ').pop() || '暂无数据';
+  };
+
   const handleLocate = async () => {
     if (!locateForm.order_time || !locateForm.order_price || !locateForm.order_size) {
       createMessage.warning('请填写下单时间、价格和数量');
@@ -175,8 +181,10 @@
 
   const handleConfirm = () => {
     if (selectedKeys.value.length === 0) return;
-    emit('confirm', [...selectedKeys.value]);
+    const ids = [...selectedKeys.value];
+    // 先关闭并复位，再通知父组件：父级处理（锁定/图表渲染）即使抛错也不会把弹窗卡住
     resetState();
+    emit('confirm', ids);
   };
 
   const handleCancel = () => {
