@@ -280,7 +280,7 @@
       afterVolume += validOrders[i].remaining_volume;
     }
 
-    const percent = (value) => (totalVolume > 0 ? ((value / totalVolume) * 100).toFixed(1) : '0.0');
+    const percent = (value) => (totalVolume > 0 ? ((value / totalVolume) * 100).toFixed(2) : '0.00');
 
     return validOrders
       .filter((order) => isLockedOrder(order.order_local_id))
