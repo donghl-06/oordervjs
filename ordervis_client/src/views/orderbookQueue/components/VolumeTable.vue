@@ -46,7 +46,7 @@
         </div>
       </div>
     </div>
-    <div class="table-container">
+    <div class="table-container" :class="{ fullscreen: isFullscreen }">
       <div
         class="volume-grid"
         :class="{ fullscreen: isFullscreen }"
@@ -91,6 +91,10 @@
     isFullscreen: {
       type: Boolean,
       default: false,
+    },
+    tableKey: {
+      type: String,
+      default: '',
     },
     searchValue: {
       type: String,
@@ -213,7 +217,7 @@
 
   // 计算属性：判断是否显示展开/收起按钮
   const shouldShowToggleButton = computed(() => {
-    return props.derection.includes('买一价') || props.derection.includes('卖一价');
+    return props.derection.includes('买') || props.derection.includes('卖');
   });
 
   const formatVolume = (value) => {
@@ -294,6 +298,10 @@
   });
 
   const toggleFullscreen = () => {
+    if (props.tableKey) {
+      emit('update-fullscreen', props.tableKey);
+      return;
+    }
     if (props.derection.includes('卖')) {
       emit('update-fullscreen', 'ask');
     } else {
@@ -471,12 +479,22 @@
       overflow-x: hidden; /* 隐藏水平滚动条 */
     }
 
+    .table-container.fullscreen {
+      min-height: 320px;
+      max-height: calc(100vh - 260px);
+    }
+
     .volume-grid {
       display: grid;
       /* 列数由模板内联样式控制（cols prop / 全屏24列） */
       gap: 0px; /* 移除间隙 */
       width: 100%;
       padding: 0px; /* 移除内边距 */
+    }
+
+    .volume-grid.fullscreen .volume-cell {
+      height: 48px;
+      font-size: 13px;
     }
 
     .volume-cell {

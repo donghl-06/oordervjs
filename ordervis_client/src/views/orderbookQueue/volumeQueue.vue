@@ -103,8 +103,9 @@
 
       <!-- ① 顶栏 第2行：控制条 -->
       <div class="ov-topbar-row controls">
-        <div class="ov-bar-group">
+        <div class="ov-bar-group time-step-group">
           <span class="group-label">时间</span>
+          <span class="step-label">小步</span>
           <Select
             v-model:value="smallStepMs"
             class="ov-select w-step"
@@ -113,6 +114,7 @@
           />
           <Button :disabled="isButtonDisabled" @click="moveTimes(-smallStepMs)">◀</Button>
           <Button :disabled="isButtonDisabled" @click="moveTimes(smallStepMs)">▶</Button>
+          <span class="step-label">大步</span>
           <Select
             v-model:value="bigStepMs"
             class="ov-select w-step"
@@ -124,6 +126,7 @@
         </div>
         <div class="ov-bar-group">
           <span class="group-label">订单</span>
+          <span class="step-label">步长</span>
           <Select
             v-model:value="orderStep"
             class="ov-select w-step"
@@ -166,16 +169,18 @@
     <div class="ov-body">
       <!-- ② 左侧数据区：买左卖右 -->
       <div class="ov-data-area">
-        <div class="ov-queue-zones">
-          <div v-show="showBid" class="ov-zone bid-zone">
+        <div class="ov-queue-zones" :class="{ expanded: expandedTable }">
+          <div v-show="!expandedTable || expandedTable.startsWith('bid')" class="ov-zone bid-zone">
             <VolumeDataTable
               :data="volumeData['bid1']?.data?.[0]?.[0] || {}"
+              v-show="isTableVisible('bid1')"
+              table-key="bid1"
               :derection="
                 volumeData['bid1_price']
                   ? '  买一价：' + (volumeData['bid1_price'] / 10000).toFixed(volumeData.is_ETF ? 3 : 2)
                   : '  买一价：'
               "
-              :is-fullscreen="bidIsFullscreen"
+              :is-fullscreen="expandedTable === 'bid1'"
               :search-value="searchValue"
               :locked-order-ids="lockedOrderIds"
               :cols="queueCols"
@@ -185,12 +190,14 @@
             />
             <VolumeDataTable
               :data="volumeData['bid2']?.data?.[0]?.[0] || {}"
+              v-show="isTableVisible('bid2')"
+              table-key="bid2"
               :derection="
                 volumeData['bid2_price']
                   ? '  买二价：' + (volumeData['bid2_price'] / 10000).toFixed(volumeData.is_ETF ? 3 : 2)
                   : '  买二价：'
               "
-              :is-fullscreen="bidIsFullscreen"
+              :is-fullscreen="expandedTable === 'bid2'"
               :search-value="searchValue"
               :locked-order-ids="lockedOrderIds"
               :cols="queueCols"
@@ -199,12 +206,14 @@
             />
             <VolumeDataTable
               :data="volumeData['bid3']?.data?.[0]?.[0] || {}"
+              v-show="isTableVisible('bid3')"
+              table-key="bid3"
               :derection="
                 volumeData['bid3_price']
                   ? '  买三价：' + (volumeData['bid3_price'] / 10000).toFixed(volumeData.is_ETF ? 3 : 2)
                   : '  买三价：'
               "
-              :is-fullscreen="bidIsFullscreen"
+              :is-fullscreen="expandedTable === 'bid3'"
               :search-value="searchValue"
               :locked-order-ids="lockedOrderIds"
               :cols="queueCols"
@@ -212,15 +221,17 @@
               @update-fullscreen="showHideTable"
             />
           </div>
-          <div v-show="showAsk" class="ov-zone ask-zone">
+          <div v-show="!expandedTable || expandedTable.startsWith('ask')" class="ov-zone ask-zone">
             <VolumeDataTable
               :data="volumeData['ask1']?.data?.[0]?.[0] || {}"
+              v-show="isTableVisible('ask1')"
+              table-key="ask1"
               :derection="
                 volumeData['ask1_price']
                   ? '  卖一价：' + (volumeData['ask1_price'] / 10000).toFixed(volumeData.is_ETF ? 3 : 2)
                   : '  卖一价：'
               "
-              :is-fullscreen="askIsFullscreen"
+              :is-fullscreen="expandedTable === 'ask1'"
               :search-value="searchValue"
               :locked-order-ids="lockedOrderIds"
               :cols="queueCols"
@@ -229,12 +240,14 @@
             />
             <VolumeDataTable
               :data="volumeData['ask2']?.data?.[0]?.[0] || {}"
+              v-show="isTableVisible('ask2')"
+              table-key="ask2"
               :derection="
                 volumeData['ask2_price']
                   ? '  卖二价：' + (volumeData['ask2_price'] / 10000).toFixed(volumeData.is_ETF ? 3 : 2)
                   : '  卖二价：'
               "
-              :is-fullscreen="askIsFullscreen"
+              :is-fullscreen="expandedTable === 'ask2'"
               :search-value="searchValue"
               :locked-order-ids="lockedOrderIds"
               :cols="queueCols"
@@ -243,12 +256,14 @@
             />
             <VolumeDataTable
               :data="volumeData['ask3']?.data?.[0]?.[0] || {}"
+              v-show="isTableVisible('ask3')"
+              table-key="ask3"
               :derection="
                 volumeData['ask3_price']
                   ? '  卖三价：' + (volumeData['ask3_price'] / 10000).toFixed(volumeData.is_ETF ? 3 : 2)
                   : '  卖三价：'
               "
-              :is-fullscreen="askIsFullscreen"
+              :is-fullscreen="expandedTable === 'ask3'"
               :search-value="searchValue"
               :locked-order-ids="lockedOrderIds"
               :cols="queueCols"
@@ -259,7 +274,7 @@
         </div>
 
         <!-- 汇总指标行：六档总量/单数 + 一档流量 -->
-        <div class="ov-summary-strip">
+        <div v-show="!expandedTable" class="ov-summary-strip">
           <div class="sum-levels">
             <div
               v-for="item in levelData"
@@ -624,13 +639,8 @@
       localStorage.setItem('volumeQueue_timestamp', selectTime.value || '');
     };
     
-    
+    const expandedTable = ref(null);
     const timesData = ref([]);
-
-    const askIsFullscreen = ref(false);
-    const bidIsFullscreen = ref(false);
-    const showAsk = ref(true);
-    const showBid = ref(true);
 
     // 搜索相关状态
     const searchValue = ref('');
@@ -961,26 +971,25 @@
     // A1 步进颗粒度选择器
     const smallStepMs = ref(30);
     const smallStepOptions = [
-      { value: 10, label: '小步 10ms' },
-      { value: 30, label: '小步 30ms' },
-      { value: 100, label: '小步 100ms' },
+      { value: 10, label: '10ms' },
+      { value: 30, label: '30ms' },
+      { value: 100, label: '100ms' },
+      { value: 500, label: '500ms' },
     ];
     const bigStepMs = ref(1000);
     const bigStepOptions = [
-      { value: 500, label: '大步 500ms' },
-      { value: 1000, label: '大步 1s' },
-      { value: 3000, label: '大步 3s' },
-      { value: 10000, label: '大步 10s' },
-      { value: 60000, label: '大步 1min' },
+      { value: 1000, label: '1s' },
+      { value: 3000, label: '3s' },
+      { value: 10000, label: '10s' },
+      { value: 60000, label: '1min' },
     ];
     const orderStep = ref(1);
     const orderStepOptions = [
       { value: 1, label: '±1 订单' },
-      { value: 50, label: '±50 订单' },
+      { value: 10, label: '±10 订单' },
       { value: 100, label: '±100 订单' },
       { value: 500, label: '±500 订单' },
     ];
-
     // 队列格子列数（买左卖右布局下每档 6 列，全屏时 VolumeTable 固定 24 列）
     const queueCols = 6;
 
@@ -1835,33 +1844,16 @@
       });
     }
 
-    const showHideTable = (detection) => {
-      if (detection == 'ask') {
-        if (askIsFullscreen.value) {
-          askIsFullscreen.value = false
-          showAsk.value = true
-          showBid.value = true
-        } else {
-          askIsFullscreen.value = true
-          showAsk.value = true
-          showBid.value = false
-        }
-      } else {
-        if (bidIsFullscreen.value) {
-          bidIsFullscreen.value = false
-          showAsk.value = true
-          showBid.value = true
-        } else {
-          bidIsFullscreen.value = true
-          showAsk.value = false
-          showBid.value = true
-        }
-      }
-    }
+    const isTableVisible = (tableKey) => !expandedTable.value || expandedTable.value === tableKey;
+
+    const showHideTable = (tableKey) => {
+      expandedTable.value = expandedTable.value === tableKey ? null : tableKey;
+    };
 
     // 按数量锁定订单逻辑函数：收集所有符合的订单，弹出选择器让用户勾选（B1）
     const lockSelectorVisible = ref(false);
     const lockCandidates = ref([]);
+
 
     const LOCK_LEVEL_DEFS = [
       { key: 'ask1', label: '卖一', direction: '卖' },
@@ -3009,6 +3001,13 @@
     }
   }
 
+  .step-label {
+    color: #667085;
+    font-size: 11px;
+    font-weight: 600;
+    white-space: nowrap;
+  }
+
   .ov-select {
     &.w-type { width: 90px; }
     &.w-sym { width: 130px; }
@@ -3154,6 +3153,14 @@
   .ov-queue-zones {
     display: flex;
     gap: 8px;
+  }
+
+  .ov-queue-zones.expanded {
+    display: block;
+  }
+
+  .ov-queue-zones.expanded .ov-zone {
+    width: 100%;
   }
 
   .ov-zone {
