@@ -563,6 +563,7 @@ class TradeBook:
                         positions[current_id] = {
                             'position': i + 1,
                             'level_order_count': len(orders),
+                            'remaining_volume': float(o.get('remaining_volume', 0) or 0),
                             'ahead_volume': ahead,
                             'behind_volume': behind,
                         }

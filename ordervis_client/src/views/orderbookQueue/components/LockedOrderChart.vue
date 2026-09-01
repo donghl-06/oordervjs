@@ -25,12 +25,34 @@
     <div v-if="!hasPoints" class="chart-placeholder">
       {{ placeholderText }}
     </div>
+
+    <div v-if="queueRows.length" class="queue-position-panel">
+      <div class="queue-position-title">当前队列位置（队首 → 队尾）</div>
+      <div v-for="row in queueRows" :key="row.id" class="queue-position-row">
+        <span class="queue-order-label" :style="{ color: row.color }">订单 {{ row.id }}</span>
+        <div class="queue-axis">
+          <span class="queue-end-label">队首</span>
+          <div v-if="row.available" class="queue-track">
+            <Tooltip :title="getQueueTooltip(row)" placement="top">
+              <span
+                class="queue-order-marker"
+                :style="{ left: row.centerPct + '%', backgroundColor: row.color }"
+              />
+            </Tooltip>
+          </div>
+          <div v-else class="queue-track queue-track-unavailable">
+            <span>当前不在盘口</span>
+          </div>
+          <span class="queue-end-label">队尾</span>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
 <script lang="js" setup>
   import { ref, computed, watch, nextTick } from 'vue';
-  import { Select, Radio } from 'ant-design-vue';
+  import { Select, Radio, Tooltip } from 'ant-design-vue';
   import { useDebounceFn } from '@vueuse/core';
   import { useECharts } from '/@/hooks/web/useECharts';
   import { getOrderLifecycle, getOrderQueueSeries } from '/@/api/orderbook/orderbook';
@@ -131,6 +153,7 @@
               t,
               ahead: queue ? Number(queue.ahead_volume) || 0 : null,
               behind: queue ? Number(queue.behind_volume) || 0 : null,
+              orderVolume: queue ? Number(queue.remaining_volume) || 0 : null,
             });
           }
         }
@@ -192,6 +215,55 @@
     if (fetching.value) return '正在计算锁定订单队列变化…';
     return '当前窗口内没有可见的锁定订单队列数据';
   });
+
+  const queueRows = computed(() => {
+    const now = currentMs.value;
+    return props.lockedIds.map((id, i) => {
+      const list = tracks.value[id] || [];
+      let point = null;
+      for (let index = list.length - 1; index >= 0; index--) {
+        if (list[index].t <= now) {
+          point = list[index];
+          break;
+        }
+      }
+
+      const color = SERIES_COLORS[i % SERIES_COLORS.length];
+      if (
+        !point ||
+        point.ahead == null ||
+        point.behind == null ||
+        point.orderVolume == null
+      ) {
+        return { id: String(id), color, available: false };
+      }
+
+      const ahead = Math.max(0, Number(point.ahead) || 0);
+      const orderVolume = Math.max(0, Number(point.orderVolume) || 0);
+      const behind = Math.max(0, Number(point.behind) || 0);
+      const total = ahead + orderVolume + behind;
+      if (total <= 0) return { id: String(id), color, available: false };
+
+      const startPct = (ahead / total) * 100;
+      const endPct = ((ahead + orderVolume) / total) * 100;
+      return {
+        id: String(id),
+        color,
+        available: true,
+        ahead,
+        orderVolume,
+        behind,
+        startPct,
+        endPct,
+        centerPct: ((startPct + endPct) / 2),
+      };
+    });
+  });
+
+  const formatQueueVolume = (value) => Number(value).toLocaleString('zh-CN');
+
+  const getQueueTooltip = (row) =>
+    `订单 ${row.id} · 队列位置（本单中心）${row.centerPct.toFixed(2)}% · 订单区间 ${row.startPct.toFixed(2)}%–${row.endPct.toFixed(2)}% · 身前量 ${formatQueueVolume(row.ahead)} · 本单剩余 ${formatQueueVolume(row.orderVolume)} · 身后量 ${formatQueueVolume(row.behind)}`;
 
   const summaryChips = computed(() => {
     return props.lockedIds
@@ -386,5 +458,113 @@
   .lock-chart {
     height: 200px;
     width: 100%;
+  }
+
+
+  .queue-position-panel {
+    margin-top: 10px;
+    padding-top: 8px;
+    border-top: 1px solid #eef2f7;
+  }
+
+  .queue-position-title {
+    margin-bottom: 6px;
+    color: #667085;
+    font-size: 11px;
+  }
+
+  .queue-position-row {
+    display: grid;
+    grid-template-columns: 82px minmax(0, 1fr);
+    align-items: center;
+    gap: 8px;
+    min-height: 25px;
+  }
+
+  .queue-order-label {
+    overflow: hidden;
+    font-size: 11px;
+    font-weight: 600;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .queue-axis {
+    display: grid;
+    grid-template-columns: 28px minmax(80px, 1fr) 28px;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .queue-end-label {
+    color: #98a2b3;
+    font-size: 10px;
+    text-align: center;
+    white-space: nowrap;
+  }
+
+  .queue-track {
+    position: relative;
+    height: 12px;
+    border: 1px solid #d0d5dd;
+    border-radius: 8px;
+    background: linear-gradient(90deg, #f2f4f7 0%, #e4e7ec 50%, #f2f4f7 100%);
+  }
+
+  .queue-track::before {
+    position: absolute;
+    top: 50%;
+    right: 6px;
+    left: 6px;
+    height: 2px;
+    background: #98a2b3;
+    content: '';
+    transform: translateY(-50%);
+  }
+
+  .queue-order-marker {
+    position: absolute;
+    z-index: 1;
+    top: 50%;
+    width: 12px;
+    height: 12px;
+    border: 2px solid #fff;
+    border-radius: 50%;
+    box-shadow: 0 0 0 1px currentColor, 0 1px 3px rgb(16 24 40 / 30%);
+    cursor: help;
+    transform: translate(-50%, -50%);
+  }
+
+  .queue-track-unavailable {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-style: dashed;
+    color: #98a2b3;
+    font-size: 10px;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    .queue-position-panel {
+      border-top-color: #2c3342;
+    }
+
+    .queue-position-title,
+    .queue-end-label {
+      color: #8b95a7;
+    }
+
+    .queue-track {
+      border-color: #475467;
+      background: linear-gradient(90deg, #252b36 0%, #343c4a 50%, #252b36 100%);
+    }
+
+    .queue-track::before {
+      background: #667085;
+    }
+
+    .queue-order-marker {
+      border-color: #1b212c;
+    }
   }
 </style>
