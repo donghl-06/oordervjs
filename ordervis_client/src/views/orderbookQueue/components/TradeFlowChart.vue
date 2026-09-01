@@ -174,7 +174,7 @@
     const textColor = props.dark ? '#8b95a7' : '#667085';
     const splitColor = props.dark ? '#2c3342' : '#eef2f7';
 
-    // 仅展示累计成交/撤单时使用局部纵轴，避免几十万累计量仍从 0 起画。
+    // 仅展示累计成交/撤单时按当前波动与累计量级生成局部纵轴。
     const cumulativeOnly = selectedMetrics.value.every((key) =>
       METRIC_DEFS.find((metricDef) => metricDef.key === key)?.instantKey,
     );
@@ -187,14 +187,22 @@
           .filter((value) => Number.isFinite(value));
       });
       if (visibleValues.length) {
-        const interval = 5000;
         const minValue = Math.min(...visibleValues);
         const maxValue = Math.max(...visibleValues);
         const range = maxValue - minValue;
-        const lowerPadding = Math.max(50000, range * 0.15);
-        const upperPadding = Math.max(interval, range * 0.1);
-        cumulativeAxis.min = Math.max(0, Math.floor((minValue - lowerPadding) / interval) * interval);
-        cumulativeAxis.max = Math.ceil((maxValue + upperPadding) / interval) * interval;
+        const magnitude = Math.max(Math.abs(minValue), Math.abs(maxValue), 1);
+
+        // 目标约 6 个刻度：主要跟随窗口内波动；近乎横盘时仅保留约 1.5% 量级的观察范围。
+        const targetSpan = Math.max(range * 1.25, magnitude * 0.015, 1);
+        const rawInterval = targetSpan / 6;
+        const power = 10 ** Math.floor(Math.log10(rawInterval));
+        const normalized = rawInterval / power;
+        const niceFactor = normalized <= 1 ? 1 : normalized <= 2 ? 2 : normalized <= 2.5 ? 2.5 : normalized <= 5 ? 5 : 10;
+        const interval = niceFactor * power;
+        const padding = Math.max(interval, (targetSpan - range) / 2);
+
+        cumulativeAxis.min = Math.max(0, Math.floor((minValue - padding) / interval) * interval);
+        cumulativeAxis.max = Math.ceil((maxValue + padding) / interval) * interval;
         if (cumulativeAxis.max <= cumulativeAxis.min) {
           cumulativeAxis.max = cumulativeAxis.min + interval;
         }
