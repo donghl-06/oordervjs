@@ -23,7 +23,7 @@
         <div v-for="stat in lockedOrderStats" :key="stat.lockedOrderId" class="stats-card">
           <div class="stats-card-header">
             <span class="stats-order-id">订单ID: {{ stat.lockedOrderId }}</span>
-            <span class="stats-position">队列第 {{ stat.queuePosition }} 位</span>
+            <span class="stats-position">队列第 {{ stat.queuePosition }} 位 · 队列位置 {{ stat.positionPercent }}%</span>
           </div>
           <div class="stats-metrics">
             <div class="stats-metric">
@@ -293,6 +293,9 @@
         beforePercent: percent(order.beforeVolume),
         currentPercent: percent(order.remaining_volume),
         afterPercent: percent(order.afterVolume),
+        positionPercent: totalVolume > 0
+          ? (((order.beforeVolume + order.remaining_volume / 2) / totalVolume) * 100).toFixed(2)
+          : '0.00',
         totalVolume,
       }));
   });
