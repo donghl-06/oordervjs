@@ -31,15 +31,16 @@
 <script lang="js" setup>
   import { ref, computed, watch, nextTick } from 'vue';
   import { Select, Radio } from 'ant-design-vue';
+  import { useDebounceFn } from '@vueuse/core';
   import { useECharts } from '/@/hooks/web/useECharts';
-  import { getOrderLifecycle } from '/@/api/orderbook/orderbook';
+  import { getOrderLifecycle, getOrderQueueSeries } from '/@/api/orderbook/orderbook';
   import { parseTimeToMs, formatMsToTimeStr } from '../composables/useSnapshotNavigation';
 
   /**
-   * C5 锁定订单身前/身后量图（修改计划.md）
-   * 横轴 = 滑动时间窗口（右缘=当前时刻，与 C2 同控件）
-   * 纵轴 = 同档位身前量（队列中排在该订单前方的总剩余量）或身后量，二选一
-   * 数据路线一（默认）：前端浏览快照时本地累计——每帧从档内订单序列求和，零额外请求；
+   * C5 锁定订单身前/身后量图
+   * 横轴 = 以当前时刻为右缘的滑动时间窗口（与 C2 同控件）
+   * 纵轴 = 同档位身前量或身后量
+   * 数据由后端按窗口均匀采样盘口快照生成，避免只记录用户浏览过的时刻。
    * 事件标记与摘要行来自 B4 order_lifecycle（每个订单只取一次，本地缓存）。
    */
   const props = defineProps({
@@ -47,7 +48,7 @@
     date: { type: String, default: '' },
     // 锁定的 order_local_id 字符串数组
     lockedIds: { type: Array, default: () => [] },
-    // 当前快照的 volumeData（六档 orders 数组含 order_local_id / remaining_volume）
+    // 保留该参数以兼容父组件；序列数据由后端按时间窗口计算
     volumeData: { type: Object, default: () => ({}) },
     currentTime: { type: String, default: '' },
     dark: { type: Boolean, default: false },
@@ -55,9 +56,8 @@
 
   const emit = defineEmits(['seek']);
 
-  const LEVEL_KEYS = ['bid1', 'bid2', 'bid3', 'ask1', 'ask2', 'ask3'];
   const SERIES_COLORS = ['#1677ff', '#722ed1', '#eb2f96', '#fa8c16', '#13c2c2', '#fa541c'];
-  const MAX_POINTS = 5000; // 单订单累计点数上限，防长会话内存膨胀
+  const SAMPLE_POINTS = 60;
 
   const windowMs = ref(3000);
   const windowOptions = [
@@ -74,52 +74,15 @@
     { value: 'behind', label: '身后量' },
   ];
 
-  // { [orderLocalId]: [{ t, ahead, behind }] } —— 浏览过的快照逐帧累计
+  // { [orderLocalId]: [{ t, ahead, behind }] } —— 后端按窗口均匀采样
   const tracks = ref({});
-  // { [orderLocalId]: { summary, events } | null } —— B4 生命周期缓存（null=查询失败/无数据）
+  // { [orderLocalId]: { summary, events } | null } —— B4 生命周期缓存
   const lifecycles = ref({});
+  const fetching = ref(false);
+  let requestSeq = 0;
 
   const chartEl = ref(null);
   const { setOptions, getInstance } = useECharts(chartEl, computed(() => (props.dark ? 'dark' : 'light')));
-
-  // 在六档队列中定位订单，返回身前/身后量（找不到返回 null，本帧不累计 → 折线自然断开）
-  const locateOrder = (id) => {
-    for (const key of LEVEL_KEYS) {
-      const orders = props.volumeData?.[key]?.orders;
-      if (!orders || !orders.length) continue;
-      const idx = orders.findIndex((o) => String(o.order_local_id) === String(id));
-      if (idx >= 0) {
-        let ahead = 0;
-        let behind = 0;
-        for (let i = 0; i < orders.length; i++) {
-          const v = Number(orders[i].remaining_volume) || 0;
-          if (i < idx) ahead += v;
-          else if (i > idx) behind += v;
-        }
-        return { ahead, behind };
-      }
-    }
-    return null;
-  };
-
-  const recordCurrentSnapshot = () => {
-    if (!props.lockedIds.length || !props.currentTime) return;
-    const t = parseTimeToMs(props.currentTime);
-    if (!t) return;
-    for (const id of props.lockedIds) {
-      const pos = locateOrder(id);
-      if (!pos) continue;
-      const list = tracks.value[id] || (tracks.value[id] = []);
-      const last = list[list.length - 1];
-      if (last && last.t === t) {
-        last.ahead = pos.ahead;
-        last.behind = pos.behind;
-      } else {
-        list.push({ t, ahead: pos.ahead, behind: pos.behind });
-        if (list.length > MAX_POINTS) list.splice(0, list.length - MAX_POINTS);
-      }
-    }
-  };
 
   // 必须定义在 immediate 监听器之前，避免组件首次挂载时访问未初始化的 const。
   const fetchLifecycle = async (id) => {
@@ -133,16 +96,60 @@
     renderChart();
   };
 
-  // 每来一个新快照（volumeData 整体替换），为每个锁定订单累计一个点。
-  watch(
-    () => props.volumeData,
-    () => {
-      recordCurrentSnapshot();
-      renderChart();
-    },
-  );
+  const fetchSeries = async () => {
+    const seq = ++requestSeq;
+    if (!props.lockedIds.length || !props.sym || !props.date || !props.currentTime) {
+      tracks.value = {};
+      fetching.value = false;
+      return;
+    }
 
-  // 锁定集合变化：初始化新订单轨迹、清理解除锁定的订单、拉取 B4 生命周期。
+    fetching.value = true;
+    try {
+      const res = await getOrderQueueSeries({
+        sym: props.sym,
+        date: props.date,
+        time: props.currentTime,
+        window_ms: windowMs.value,
+        order_ids: props.lockedIds.join(','),
+        points: SAMPLE_POINTS,
+      });
+      if (seq !== requestSeq) return;
+
+      const nextTracks = {};
+      props.lockedIds.forEach((id) => {
+        nextTracks[id] = [];
+      });
+
+      if (res.code === 0 && res.data) {
+        for (const point of res.data.series || []) {
+          const t = parseTimeToMs(point.time);
+          if (!t) continue;
+          for (const id of props.lockedIds) {
+            const queue = point.orders?.[String(id)];
+            nextTracks[id].push({
+              t,
+              ahead: queue ? Number(queue.ahead_volume) || 0 : null,
+              behind: queue ? Number(queue.behind_volume) || 0 : null,
+            });
+          }
+        }
+      }
+
+      tracks.value = nextTracks;
+      renderChart();
+    } catch (e) {
+      if (seq === requestSeq) {
+        tracks.value = {};
+        renderChart();
+      }
+    } finally {
+      if (seq === requestSeq) fetching.value = false;
+    }
+  };
+  const debouncedFetch = useDebounceFn(fetchSeries, 120);
+
+  // 锁定集合变化：初始化新订单轨迹、清理解除锁定的订单、拉取生命周期。
   watch(
     () => [...props.lockedIds],
     (ids) => {
@@ -154,40 +161,36 @@
         if (!idSet.has(id)) delete lifecycles.value[id];
       });
       ids.forEach((id) => {
-        if (!tracks.value[id]) tracks.value[id] = [];
         if (!(id in lifecycles.value)) fetchLifecycle(id);
       });
-      // 组件刚挂载时 volumeData 已存在，不会触发上面的监听；锁定当下立即记录首个点。
-      nextTick(() => {
-        recordCurrentSnapshot();
-        renderChart();
-      });
+      debouncedFetch();
     },
     { immediate: true },
   );
 
-  // 换标的/换日期 → 本地累计与生命周期缓存全部作废
+  // 换标的/换日期 → 本地缓存作废，并重新请求当前窗口。
   watch(
     () => [props.sym, props.date],
     () => {
       tracks.value = {};
       lifecycles.value = {};
-      props.lockedIds.forEach((id) => {
-        tracks.value[id] = [];
-        fetchLifecycle(id);
-      });
+      props.lockedIds.forEach((id) => fetchLifecycle(id));
+      debouncedFetch();
     },
   );
 
   const currentMs = computed(() => parseTimeToMs(props.currentTime));
 
   const hasPoints = computed(() =>
-    props.lockedIds.some((id) => (tracks.value[id] || []).length > 0),
+    props.lockedIds.some((id) =>
+      (tracks.value[id] || []).some((point) => point.ahead != null || point.behind != null),
+    ),
   );
 
   const placeholderText = computed(() => {
     if (!props.lockedIds.length) return '暂无锁定订单';
-    return '浏览到包含锁定订单的快照后开始累计（步进/跳转均可）';
+    if (fetching.value) return '正在计算锁定订单队列变化…';
+    return '当前窗口内没有可见的锁定订单队列数据';
   });
 
   const summaryChips = computed(() => {
@@ -219,15 +222,15 @@
     return full.slice(6);
   };
 
-  // 事件时刻的纵轴取值：优先用生命周期自带的队列位置（无需浏览过该时刻），
-  // 否则找本地累计中 ≤ 事件时间的最近点，都没有则跳过该标记
+  // 事件时刻的纵轴取值：优先用生命周期自带的队列位置，
+  // 否则使用采样序列中事件之前最近的非空值。
   const eventY = (id, eventMs, queue) => {
     const key = metric.value === 'ahead' ? 'ahead_volume' : 'behind_volume';
     if (queue && queue[key] != null) return queue[key];
     const list = tracks.value[id] || [];
     const localKey = metric.value;
     for (let i = list.length - 1; i >= 0; i--) {
-      if (list[i].t <= eventMs) return list[i][localKey];
+      if (list[i].t <= eventMs && list[i][localKey] != null) return list[i][localKey];
     }
     return null;
   };
@@ -264,9 +267,8 @@
       series.push({
         name: `订单 ${id}`,
         type: 'line',
-        step: 'end', // 阶梯线：两次浏览之间量保持
-        showSymbol: points.length <= 200,
-        symbolSize: 3,
+        showSymbol: false,
+        smooth: false,
         lineStyle: { width: 1.5 },
         itemStyle: { color },
         data: points,
@@ -325,15 +327,13 @@
 
   let boundInstance = null;
 
-  // 渲染：tracks/lifecycles 的增量修改处显式调用（避免对 5000 点数组做 deep watch）
   const renderChart = async () => {
     if (!hasPoints.value) return;
-    await nextTick(); // 等 v-show 生效、容器高度恢复
+    await nextTick();
     const inst = getInstance();
-    inst?.resize(); // 初次 init 时容器可能 display:none（0 尺寸），此处纠正
+    inst?.resize();
     setOptions(buildOptions());
-    // 点击图上某点 → 主区跳转到该时刻（图↔格联动）；
-    // 暗色切换会 dispose 重建实例，故按实例去重绑定而非只绑一次
+    // 点击图上某点 → 主区跳转到该时刻（图↔格联动）。
     if (inst && inst !== boundInstance) {
       boundInstance = inst;
       inst.on('click', (params) => {
@@ -343,8 +343,9 @@
     }
   };
 
-  // 指标 / 窗口 / 主题 / 当前时刻变化 → 重绘（数据变更走上方显式 renderChart 调用）
-  watch([metric, windowMs, () => props.dark, () => props.currentTime], renderChart);
+  // 时间 / 窗口变化重新按窗口采样；指标和主题变化只重绘。
+  watch([() => props.currentTime, windowMs], () => debouncedFetch());
+  watch([metric, () => props.dark], renderChart);
 </script>
 
 <style lang="less" scoped>

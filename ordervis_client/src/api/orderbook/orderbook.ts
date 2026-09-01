@@ -313,3 +313,32 @@ export async function getOrderLifecycle(params: {
     throw error;
   }
 }
+
+/**
+ * 获取锁定订单的身前/身后量时间序列（C5）
+ * order_ids 使用逗号分隔，例如："123,456"
+ */
+export async function getOrderQueueSeries(params: {
+  sym: string;
+  date: string;
+  time: string;
+  window_ms: number;
+  order_ids: string;
+  points?: number;
+}) {
+  try {
+    const response = await defHttp.get(
+      {
+        url: '/tradebook/order_queue_series',
+        params: params,
+      },
+      {
+        joinTime: false,
+      },
+    );
+    return processApiData(response.data);
+  } catch (error) {
+    console.error('Error fetching order queue series:', error);
+    throw error;
+  }
+}

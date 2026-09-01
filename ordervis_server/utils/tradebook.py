@@ -542,27 +542,70 @@ class TradeBook:
         if self._cstra_df is None and os.path.exists(self._cstra_path()):
             self._cstra_df = pd.read_csv(self._cstra_path())
 
-    def _queue_position_at(self, time_str: str, order_id: int) -> Optional[Dict]:
-        """在指定时刻的快照中定位订单，返回队列位置与身前/身后量"""
+    def _queue_positions_at(self, time_str: str, order_ids: List[int]) -> Dict[int, Dict]:
+        """在指定时刻的一次快照中批量定位订单，返回队列位置与身前/身后量"""
         try:
             snap = self.visualizer.query_by_time(self.date, time_str)
             if not snap:
-                return None
+                return {}
+            wanted = {int(order_id) for order_id in order_ids}
+            positions = {}
             for level in snap.get('levels', {}).values():
                 orders = level.get('orders', [])
                 for i, o in enumerate(orders):
-                    if int(o.get('order_local_id', -1)) == order_id:
+                    try:
+                        current_id = int(o.get('order_local_id', -1))
+                    except (TypeError, ValueError):
+                        continue
+                    if current_id in wanted:
                         ahead = sum(int(x.get('remaining_volume', 0)) for x in orders[:i])
                         behind = sum(int(x.get('remaining_volume', 0)) for x in orders[i + 1:])
-                        return {
+                        positions[current_id] = {
                             'position': i + 1,
                             'level_order_count': len(orders),
                             'ahead_volume': ahead,
                             'behind_volume': behind,
                         }
-            return None
+            return positions
         except Exception:
-            return None
+            return {}
+
+    def _queue_position_at(self, time_str: str, order_id: int) -> Optional[Dict]:
+        """在指定时刻的快照中定位订单，返回队列位置与身前/身后量"""
+        return self._queue_positions_at(time_str, [order_id]).get(order_id)
+
+    def get_order_queue_series(
+        self,
+        time_str: str,
+        window_ms: int,
+        order_ids: List[int],
+        points: int = 60,
+    ) -> List[Dict]:
+        """获取窗口内多个订单的队列位置、身前量和身后量序列。"""
+        self.update_access_time()
+        unique_ids = list(dict.fromkeys(int(order_id) for order_id in order_ids))
+        if not unique_ids:
+            return []
+
+        end_ms = _time_to_ms(time_str)
+        start_ms = max(end_ms - int(window_ms), CONTINUOUS_AUCTION_START_MS)
+        points = max(2, min(int(points), 500))
+        step = (end_ms - start_ms) / points
+        if step <= 0:
+            return []
+
+        sample_times = [_ms_to_time(round(start_ms + i * step)) for i in range(points + 1)]
+        series = []
+        for sample_time in sample_times[1:]:
+            positions = self._queue_positions_at(sample_time, unique_ids)
+            series.append({
+                'time': sample_time,
+                'orders': {
+                    str(order_id): positions.get(order_id)
+                    for order_id in unique_ids
+                },
+            })
+        return series
 
     def get_order_lifecycle(self, order_id: int) -> Dict[str, Any]:
         """

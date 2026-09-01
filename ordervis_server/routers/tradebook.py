@@ -428,6 +428,73 @@ async def order_lifecycle(
         }
 
 
+@router.get("/order_queue_series", summary="获取锁定订单队列序列")
+async def order_queue_series(
+    sym: str,
+    date: str,
+    time: str,
+    window_ms: int,
+    order_ids: str,
+    points: int = 60,
+    # current_user: dict = Depends(get_current_user)
+):
+    """
+    获取窗口内锁定订单的身前/身后量序列。
+    order_ids 使用逗号分隔，例如：123,456,789。
+    每个时间点对应一次盘口快照；订单不在盘口中时返回 null。
+    """
+    storage = get_shared_storage()
+    tradebook = storage.get(sym, date)
+
+    if not tradebook:
+        return {
+            "code": 1,
+            "data": None,
+            "message": f"TradeBook {sym}_{date} 不存在"
+        }
+
+    try:
+        parsed_ids = []
+        for raw_id in order_ids.split(','):
+            raw_id = raw_id.strip()
+            if not raw_id:
+                continue
+            parsed_ids.append(int(raw_id))
+        parsed_ids = list(dict.fromkeys(parsed_ids))
+        if not parsed_ids:
+            return {
+                "code": 1,
+                "data": None,
+                "message": "order_ids 不能为空"
+            }
+
+        series = tradebook.get_order_queue_series(time, window_ms, parsed_ids, points)
+        return {
+            "code": 0,
+            "data": {
+                "symbol": sym,
+                "date": date,
+                "time": time,
+                "window_ms": window_ms,
+                "order_ids": parsed_ids,
+                "series": series,
+            },
+            "message": f"获取锁定订单队列序列成功（{len(series)} 个采样点）"
+        }
+    except ValueError:
+        return {
+            "code": 1,
+            "data": None,
+            "message": "order_ids 必须是逗号分隔的整数"
+        }
+    except Exception as e:
+        return {
+            "code": 1,
+            "data": None,
+            "message": f"获取锁定订单队列序列失败: {str(e)}"
+        }
+
+
 @router.get("/pastTimeTradeInfo", summary="获取订单统计信息")
 async def pastTimeTradeInfo(
     sym: str,
