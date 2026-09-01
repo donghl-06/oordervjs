@@ -267,7 +267,7 @@ export async function getNextChange(params: {
 
 /**
  * 获取时间窗口内买一/卖一流量序列（C2 图表数据）
- * 每桶字段：bid_create/bid_cancel/bid_traded/ask_create/ask_cancel/ask_traded
+ * 每桶同时返回撤单/成交的瞬时字段和 *_cumulative 日内累计字段
  */
 export async function getTradeFlowSeries(params: {
   sym: string;

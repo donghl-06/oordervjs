@@ -36,8 +36,8 @@
    * C2 Q-t 窗口图（修改计划.md）
    * 横轴 = 以当前时刻为右缘的滑动时间窗口（500ms/1s/3s/10s/1min 可选）
    * 纵轴 = 量，指标可选（买一/卖一 × 挂单量/撤单/成交量，最多双选叠加）
-   *   挂单量 = 该时刻一档盘口累计等待量（状态量，后端锚点回溯）；
-   *   撤单/成交 = 桶内新增量（差分流量）
+   *   挂单量 = 该时刻一档盘口累计等待量（状态量）；
+   *   撤单/成交曲线 = 从连续竞价开始截至该时刻的累计量，浮窗同时展示桶内瞬时量
    * 竖游标 = 当前时刻（窗口右缘）；点击图上某点 → emit('seek', 该桶时间) 主区跳转
    */
   const props = defineProps({
@@ -62,14 +62,14 @@
   ];
 
   // 6 个指标，颜色与页面约定一致（买红卖绿，同侧三指标用明度区分）
-  // 挂单量 = 盘口累计等待量（bid_volume/ask_volume）；撤单/成交 = 桶内新增量
+  // 撤单/成交以累计量绘线，并保留原桶字段作为浮窗中的瞬时新增量。
   const METRIC_DEFS = [
-    { key: 'bid_volume', label: '买一挂单量', color: '#f5222d' },
-    { key: 'bid_cancel', label: '买一撤单', color: '#ff9c6e' },
-    { key: 'bid_traded', label: '买一成交', color: '#a8071a' },
-    { key: 'ask_volume', label: '卖一挂单量', color: '#52c41a' },
-    { key: 'ask_cancel', label: '卖一撤单', color: '#95de64' },
-    { key: 'ask_traded', label: '卖一成交', color: '#237804' },
+    { key: 'bid_volume', label: '买一挂单量', color: '#f5222d', plotKey: 'bid_volume' },
+    { key: 'bid_cancel', label: '买一撤单', color: '#ff9c6e', plotKey: 'bid_cancel_cumulative', instantKey: 'bid_cancel' },
+    { key: 'bid_traded', label: '买一成交', color: '#a8071a', plotKey: 'bid_traded_cumulative', instantKey: 'bid_traded' },
+    { key: 'ask_volume', label: '卖一挂单量', color: '#52c41a', plotKey: 'ask_volume' },
+    { key: 'ask_cancel', label: '卖一撤单', color: '#95de64', plotKey: 'ask_cancel_cumulative', instantKey: 'ask_cancel' },
+    { key: 'ask_traded', label: '卖一成交', color: '#237804', plotKey: 'ask_traded_cumulative', instantKey: 'ask_traded' },
   ];
   const metricOptions = METRIC_DEFS.map((m) => ({ value: m.key, label: m.label }));
   const selectedMetrics = ref(['bid_volume', 'ask_volume']);
@@ -150,7 +150,7 @@
         itemStyle: { color: def.color },
         // 桶右缘时间作为 x 值（当日毫秒数，value 轴避免 echarts time 轴时区偏移）
         // 挂单量在锚点缺失时为 null → 折线自然断开而非误导性归零
-        data: list.map((b) => [parseTimeToMs(b.end), b[key] ?? null]),
+        data: list.map((b) => [parseTimeToMs(b.end), b[def.plotKey] ?? null]),
       };
     });
 
@@ -186,7 +186,26 @@
       },
       tooltip: {
         trigger: 'axis',
-        valueFormatter: (v) => (v == null ? '--' : Number(v).toLocaleString('zh-CN')),
+        formatter: (params) => {
+          const items = Array.isArray(params) ? params : [params];
+          if (!items.length) return '';
+          const pointMs = Number(items[0].value?.[0] ?? items[0].axisValue);
+          const bucket = list.find((b) => parseTimeToMs(b.end) === pointMs);
+          const lines = [formatMsToTimeStr(pointMs)];
+          items.forEach((item) => {
+            const def = METRIC_DEFS.find((m) => m.label === item.seriesName);
+            const plotted = item.value?.[1];
+            const value = plotted == null ? '--' : Number(plotted).toLocaleString('zh-CN');
+            if (def?.instantKey) {
+              const instant = bucket?.[def.instantKey];
+              const instantText = instant == null ? '--' : Number(instant).toLocaleString('zh-CN');
+              lines.push(`${item.marker}${item.seriesName}：累计 ${value}；瞬时 ${instantText}`);
+            } else {
+              lines.push(`${item.marker}${item.seriesName}：${value}`);
+            }
+          });
+          return lines.join('<br/>');
+        },
         axisPointer: {
           label: { formatter: (p) => formatMsToTimeStr(p.value) },
         },

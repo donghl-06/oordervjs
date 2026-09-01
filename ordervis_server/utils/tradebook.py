@@ -63,6 +63,7 @@ class TradeBook:
         self._csord_df: Optional[pd.DataFrame] = None
         self._cstra_df: Optional[pd.DataFrame] = None
         self._order_price_map: Optional[Dict[int, float]] = None
+        self._best_cancel_records: Optional[List[Dict]] = None
 
         # 后台构建 create_time 映射，不阻塞初始化
         threading.Thread(target=self._build_order_time_map, daemon=True).start()
@@ -194,12 +195,15 @@ class TradeBook:
 
     # ---------- 流量时间序列（C2） ----------
 
-    def _best_level_cancel_volumes(self, start_ms: int, end_ms: int) -> Dict[int, Dict[str, float]]:
+    def _best_level_cancel_volumes(self, start_ms: int, end_ms: int) -> List[Dict]:
         """
         修补引擎撤单计数器（恒为0）：从 cstra 撤单记录(et=2)计算买一/卖一撤单量。
         判定：撤单按 orderid 归属买/卖侧；该订单挂单价 == 撤单时刻买一/卖一价 → 计入一档。
         Returns: [{'time_ms': ..., 'side': 'bid'|'ask', 'volume': ...}, ...]
         """
+        if self._best_cancel_records is not None:
+            return [r for r in self._best_cancel_records if start_ms < r['time_ms'] <= end_ms]
+
         self._load_tick_data()
         records = []
         if self._cstra_df is None or self._csord_df is None:
@@ -215,8 +219,8 @@ class TradeBook:
                 self._order_price_map = dict(zip(
                     self._csord_df['orderid'].astype('int64'), self._csord_df['price'].astype(float)
                 ))
-            start_str = f"{self.date} {_ms_to_time(start_ms)}"
-            end_str = f"{self.date} {_ms_to_time(end_ms)}"
+            start_str = f"{self.date} {_ms_to_time(CONTINUOUS_AUCTION_START_MS)}"
+            end_str = f"{self.date} 15:00:00.000"
             win = cancels[(cancels['datetime'] > start_str) & (cancels['datetime'] <= end_str)]
             for _, row in win.iterrows():
                 bid_oid = int(row['bidorderid'])
@@ -240,7 +244,8 @@ class TradeBook:
                     records.append({'time_ms': _time_to_ms(time_part), 'side': 'ask', 'volume': float(row['size'])})
         except Exception as e:
             self.logger.n_log(f"撤单量修补计算失败: {self.get_key()}, 错误: {e}", self.log_level.ERROR)
-        return records
+        self._best_cancel_records = sorted(records, key=lambda r: r['time_ms'])
+        return [r for r in self._best_cancel_records if start_ms < r['time_ms'] <= end_ms]
 
     def get_trade_flow_series(self, time_str: str, window_ms: int, points: int = 60) -> List[Dict]:
         """
@@ -268,13 +273,26 @@ class TradeBook:
         sample_times = [_ms_to_time(round(start_ms + i * step)) for i in range(points + 1)]
         snapshots = [self.visualizer.query_market_data(self.date, t) for t in sample_times]
 
-        # 撤单修补：窗口内所有一档撤单记录，按桶归集
-        cancel_records = self._best_level_cancel_volumes(start_ms, end_ms)
+        # 撤单修补：同一份日内记录同时生成桶内瞬时量和截至桶右缘的累计量。
+        all_cancel_records = self._best_level_cancel_volumes(CONTINUOUS_AUCTION_START_MS - 1, end_ms)
         bucket_cancel = [{'bid': 0.0, 'ask': 0.0} for _ in range(points)]
-        for rec in cancel_records:
+        for rec in all_cancel_records:
+            if rec['time_ms'] <= start_ms:
+                continue
             idx = int((rec['time_ms'] - start_ms) / step)
             idx = min(max(idx, 0), points - 1)
             bucket_cancel[idx][rec['side']] += rec['volume']
+
+        cumulative_cancel = []
+        running_cancel = {'bid': 0.0, 'ask': 0.0}
+        cancel_index = 0
+        for sample_time in sample_times[1:]:
+            sample_ms = _time_to_ms(sample_time)
+            while cancel_index < len(all_cancel_records) and all_cancel_records[cancel_index]['time_ms'] <= sample_ms:
+                rec = all_cancel_records[cancel_index]
+                running_cancel[rec['side']] += rec['volume']
+                cancel_index += 1
+            cumulative_cancel.append(dict(running_cancel))
 
         # 一档状态量必须按采样时刻读取真实快照。累计计数器只描述流量，最优价切档后
         # 无法从窗口右缘的一档反推出历史时刻的“一档”，此前的反推会产生伪 0。
@@ -295,10 +313,14 @@ class TradeBook:
                 'end': sample_times[i + 1],
                 'bid_create': (cur.get('bid_create_count') or 0) - (prev.get('bid_create_count') or 0),
                 'bid_cancel': bucket_cancel[i]['bid'],
+                'bid_cancel_cumulative': cumulative_cancel[i]['bid'],
                 'bid_traded': (cur.get('bid_traded_count') or 0) - (prev.get('bid_traded_count') or 0),
+                'bid_traded_cumulative': cur.get('bid_traded_count') or 0,
                 'ask_create': (cur.get('ask_create_count') or 0) - (prev.get('ask_create_count') or 0),
                 'ask_cancel': bucket_cancel[i]['ask'],
+                'ask_cancel_cumulative': cumulative_cancel[i]['ask'],
                 'ask_traded': (cur.get('ask_traded_count') or 0) - (prev.get('ask_traded_count') or 0),
+                'ask_traded_cumulative': cur.get('ask_traded_count') or 0,
                 # 桶右缘时刻的一档累计挂单量（盘口等待量）
                 'bid_volume': _level_volume(i, 'bid'),
                 'ask_volume': _level_volume(i, 'ask'),
