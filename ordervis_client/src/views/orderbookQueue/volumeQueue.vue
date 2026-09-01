@@ -179,6 +179,7 @@
               :search-value="searchValue"
               :locked-order-ids="lockedOrderIds"
               :cols="queueCols"
+              v-on:toggle-lock="toggleOrderLock"
               :show-tooltip="true"
               @update-fullscreen="showHideTable"
             />
@@ -193,6 +194,7 @@
               :search-value="searchValue"
               :locked-order-ids="lockedOrderIds"
               :cols="queueCols"
+              v-on:toggle-lock="toggleOrderLock"
               @update-fullscreen="showHideTable"
             />
             <VolumeDataTable
@@ -206,6 +208,7 @@
               :search-value="searchValue"
               :locked-order-ids="lockedOrderIds"
               :cols="queueCols"
+              v-on:toggle-lock="toggleOrderLock"
               @update-fullscreen="showHideTable"
             />
           </div>
@@ -221,6 +224,7 @@
               :search-value="searchValue"
               :locked-order-ids="lockedOrderIds"
               :cols="queueCols"
+              v-on:toggle-lock="toggleOrderLock"
               @update-fullscreen="showHideTable"
             />
             <VolumeDataTable
@@ -234,6 +238,7 @@
               :search-value="searchValue"
               :locked-order-ids="lockedOrderIds"
               :cols="queueCols"
+              v-on:toggle-lock="toggleOrderLock"
               @update-fullscreen="showHideTable"
             />
             <VolumeDataTable
@@ -247,6 +252,7 @@
               :search-value="searchValue"
               :locked-order-ids="lockedOrderIds"
               :cols="queueCols"
+              v-on:toggle-lock="toggleOrderLock"
               @update-fullscreen="showHideTable"
             />
           </div>
@@ -2064,6 +2070,21 @@
         
         return found;
        };
+
+     const toggleOrderLock = (order) => {
+       const rawId = order && order.order_local_id;
+       const id = rawId === undefined || rawId === null ? null : String(rawId);
+       if (!id) return;
+
+       const index = lockedOrderIds.value.findIndex((item) => String(item) === id);
+       if (index >= 0) {
+         lockedOrderIds.value.splice(index, 1);
+         createMessage.success('已取消订单 ' + id + ' 的锁定');
+       } else {
+         lockedOrderIds.value.push(id);
+         createMessage.success('已锁定订单 ' + id);
+       }
+     };
 
      // 清除锁定订单
      const unlockOrder = (orderId) => {

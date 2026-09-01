@@ -63,8 +63,9 @@
         >
           <div
             class="volume-cell"
-            :class="{ highlighted: isHighlighted(order) }"
+            :class="{ highlighted: isHighlighted(order), clickable: !!order.order_local_id }"
             :style="getCellStyle(order)"
+            v-on:click="toggleLock(order)"
           >
             {{ order.remaining_volume || '' }}
           </div>
@@ -110,7 +111,7 @@
     },
   });
 
-  const emit = defineEmits(['update-fullscreen']);
+  const emit = defineEmits(['update-fullscreen', 'toggle-lock']);
 
   // 锁定订单 ID 集合（Set 查询 O(1)，替代数组线性 some）
   const lockedIdSet = computed(() => {
@@ -164,6 +165,11 @@
   const isHighlighted = (order) => {
     if (!order || !order.order_local_id) return false;
     return lockedIdSet.value.has(String(order.order_local_id));
+  };
+
+  const toggleLock = (order) => {
+    if (!order || !order.order_local_id) return;
+    emit('toggle-lock', order);
   };
 
   // D3 热力梯度：格子底色深度 ∝ 订单量 / 当前档位最大单量
@@ -488,6 +494,15 @@
       overflow: hidden;
       margin: 0px; /* 确保没有外边距 */
       transition: background-color 0.25s ease; /* D3 量变化时底色平滑过渡 */
+      cursor: default;
+    }
+
+    .volume-cell.clickable {
+      cursor: pointer;
+    }
+
+    .volume-cell.clickable:hover {
+      box-shadow: inset 0 0 0 1px #1677ff;
     }
 
     .volume-cell.highlighted {
