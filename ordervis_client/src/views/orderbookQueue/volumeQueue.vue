@@ -58,7 +58,42 @@
             </Tooltip>
           </span>
           <span class="status-item">价差 <b class="num">{{ spreadText }}</b></span>
-          <span class="status-item">已锁定 <b class="num">{{ lockedOrderIds.length }}</b></span>
+          <Popover placement="bottomRight" trigger="click">
+            <template #content>
+              <div class="locked-orders-popover">
+                <div class="locked-orders-popover-header">
+                  <span>已锁定订单（{{ lockedOrderIds.length }}）</span>
+                  <Popconfirm
+                    title="确定清除全部锁定订单吗？"
+                    ok-text="确定"
+                    cancel-text="取消"
+                    @confirm="clearLockedOrders"
+                  >
+                    <Button type="link" size="small" danger>清除全部</Button>
+                  </Popconfirm>
+                </div>
+                <div v-if="lockedOrderDetails.length" class="locked-order-list">
+                  <div v-for="order in lockedOrderDetails" :key="order.id" class="locked-order-item">
+                    <div class="locked-order-item-main">
+                      <span class="locked-order-id">订单ID {{ order.id }}</span>
+                      <Button type="link" size="small" danger @click="unlockOrder(order.id)">解锁</Button>
+                    </div>
+                    <div class="locked-order-item-meta">
+                      <template v-if="order.visible">
+                        {{ order.direction }}{{ order.levelLabel }} · 价格 {{ formatLockedPrice(order.price) }} ·
+                        剩余量 {{ order.volume }}
+                      </template>
+                      <template v-else>当前快照不可见，仍可取消锁定</template>
+                    </div>
+                  </div>
+                </div>
+                <div v-else class="locked-orders-empty">暂无锁定订单</div>
+              </div>
+            </template>
+            <span class="status-item locked-status" role="button" tabindex="0">
+              已锁定 <b class="num">{{ lockedOrderIds.length }}</b> ▼
+            </span>
+          </Popover>
           <span class="status-item theme-toggle">
             暗色
             <Switch v-model:checked="darkMode" size="small" />
@@ -115,7 +150,14 @@
           <Button type="primary" size="small" @click="lockOrdersByVolume">按量</Button>
           <Input v-model:value="lockByIdValue" placeholder="订单ID" class="ov-lock-input w-id" />
           <Button type="primary" size="small" @click="lockOrdersById(true)">按ID</Button>
-          <Button size="small" @click="clearLockedOrders">清除</Button>
+          <Popconfirm
+            title="确定清除全部锁定订单吗？"
+            ok-text="确定"
+            cancel-text="取消"
+            @confirm="clearLockedOrders"
+          >
+            <Button size="small">清除全部</Button>
+          </Popconfirm>
         </div>
       </div>
     </div>
@@ -280,7 +322,7 @@
 <script lang="js" setup>
     import { ref, computed, onMounted, onUnmounted, watch, h, nextTick } from 'vue';
     import { useRoute, useRouter } from 'vue-router';
-    import { Table, Empty, Spin, Radio, Button, Select, Input, Tooltip, Progress, Switch  } from 'ant-design-vue';
+    import { Table, Empty, Spin, Radio, Button, Select, Input, Tooltip, Progress, Switch, Popover, Popconfirm } from 'ant-design-vue';
   import { QuestionCircleOutlined } from '@ant-design/icons-vue';
     import { getSymList, getDateList, getVolumeData, getDatetimeList, getVolumeDataByTime, getSnapshotById, getSnapshotByIndex, getSnapshotByTime, getPastTimeTradeInfo, getNextChange, initTradeBook, getProgress, checkServerStatus } from '/@/api/orderbook/orderbook';
 
@@ -1821,6 +1863,44 @@
       { key: 'bid3', label: '买三', direction: '买' },
     ];
 
+    // 顶栏锁定订单列表：订单离开当前快照后仍保留 ID，并明确提示当前不可见。
+    const lockedOrderDetails = computed(() => {
+      const lockedSet = new Set(lockedOrderIds.value.map((id) => String(id)));
+      const details = new Map();
+
+      for (const levelDef of LOCK_LEVEL_DEFS) {
+        const rowData = volumeData.value[levelDef.key]?.data?.[0]?.[0];
+        if (!rowData) continue;
+
+        for (let i = 1; ; i += 1) {
+          const volumeKey = 'v' + i;
+          if (rowData[volumeKey] === undefined || rowData[volumeKey] === '') break;
+
+          const id = rowData[volumeKey + '_order_local_id'];
+          if (id === undefined || id === null || !lockedSet.has(String(id))) continue;
+
+          details.set(String(id), {
+            id: String(id),
+            visible: true,
+            levelLabel: levelDef.label,
+            direction: levelDef.direction,
+            price: volumeData.value[levelDef.key + '_price'],
+            volume: rowData[volumeKey],
+          });
+        }
+      }
+
+      return lockedOrderIds.value.map((id) => details.get(String(id)) || {
+        id: String(id),
+        visible: false,
+      });
+    });
+
+    const formatLockedPrice = (price) => {
+      if (price === undefined || price === null || price === '') return '--';
+      return (Number(price) / 10000).toFixed(isETF.value ? 3 : 2);
+    };
+
     const lockOrdersByVolume = () => {
        if (!lockByVolumeValue.value.trim()) {
          createMessage.warning('请输入remaining volume数值');
@@ -1986,6 +2066,12 @@
        };
 
      // 清除锁定订单
+     const unlockOrder = (orderId) => {
+       const id = String(orderId);
+       lockedOrderIds.value = lockedOrderIds.value.filter((item) => String(item) !== id);
+       createMessage.success("已取消订单 " + id + " 的锁定");
+     };
+
      const clearLockedOrders = () => {
        lockedOrderIds.value = [];
        createMessage.success('已清除所有锁定订单');
@@ -2931,6 +3017,65 @@
       align-items: center;
       gap: 6px;
     }
+  }
+
+  .locked-orders-popover {
+    width: 300px;
+  }
+
+  .locked-orders-popover-header,
+  .locked-order-item-main {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+  }
+
+  .locked-orders-popover-header {
+    padding-bottom: 6px;
+    border-bottom: 1px solid #edf1f7;
+    color: #425466;
+    font-size: 12px;
+    font-weight: 600;
+  }
+
+  .locked-order-list {
+    max-height: 280px;
+    overflow-y: auto;
+  }
+
+  .locked-order-item {
+    padding: 7px 0;
+    border-bottom: 1px solid #f0f2f5;
+  }
+
+  .locked-order-item:last-child {
+    border-bottom: 0;
+  }
+
+  .locked-order-id {
+    color: #1d2939;
+    font-size: 12px;
+    font-weight: 600;
+  }
+
+  .locked-order-item-meta,
+  .locked-orders-empty {
+    color: #98a2b3;
+    font-size: 11px;
+  }
+
+  .locked-order-item-meta {
+    margin-top: 2px;
+  }
+
+  .locked-orders-empty {
+    padding: 12px 0 4px;
+    text-align: center;
+  }
+
+  .locked-status {
+    cursor: pointer;
   }
 
   // 主体左右分栏：左数据区 55% / 右图表区 45%
