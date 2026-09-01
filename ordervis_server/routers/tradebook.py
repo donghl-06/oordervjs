@@ -428,6 +428,52 @@ async def order_lifecycle(
         }
 
 
+@router.get("/order_execution_estimate", summary="获取订单真实成交与预测成交时间")
+async def order_execution_estimate(
+    sym: str,
+    date: str,
+    time: str,
+    order_id: int,
+    # current_user: dict = Depends(get_current_user)
+):
+    """
+    返回订单完整交易日的真实成交结果，以及仅使用 time 之前数据计算的预测。
+    预测采用身前队列消耗速度与同价位被动挂单成交速度，不使用未来成交数据。
+    """
+    storage = get_shared_storage()
+    tradebook = storage.get(sym, date)
+    if not tradebook:
+        return {
+            "code": 1,
+            "data": None,
+            "message": f"TradeBook {sym}_{date} 不存在"
+        }
+
+    try:
+        result = tradebook.get_order_execution_estimate(time, order_id)
+        if not result.get("success"):
+            return {
+                "code": 1,
+                "data": None,
+                "message": result.get("message", "订单成交时间分析失败")
+            }
+
+        data = dict(result)
+        data.pop("success", None)
+        data.update({"symbol": sym, "date": date})
+        return {
+            "code": 0,
+            "data": data,
+            "message": "订单成交时间分析成功"
+        }
+    except Exception as e:
+        return {
+            "code": 1,
+            "data": None,
+            "message": f"订单成交时间分析失败: {str(e)}"
+        }
+
+
 @router.get("/order_queue_series", summary="获取锁定订单队列序列")
 async def order_queue_series(
     sym: str,

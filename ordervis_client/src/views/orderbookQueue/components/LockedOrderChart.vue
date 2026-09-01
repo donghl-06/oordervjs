@@ -212,6 +212,91 @@
 
   const currentMs = computed(() => parseTimeToMs(props.currentTime));
 
+  // 当前队列位置必须和左侧 VolumeTable 使用完全相同的快照。
+  // 左侧表格按 v1..vN 读取 data[0][0]，这里复用同样的读取口径，避免
+  // 后端异步采样序列尚未刷新时，右侧显示上一个时刻的数据。
+  const currentSnapshotReady = computed(() => {
+    const snapshotTime = props.volumeData?.datetime;
+    const snapshotTimeText = snapshotTime ? String(snapshotTime).split(" ").pop() : "";
+    return Boolean(snapshotTimeText) && parseTimeToMs(snapshotTimeText) === currentMs.value;
+  });
+
+  const currentSnapshotPositions = computed(() => {
+    if (!currentSnapshotReady.value) return {};
+
+    const lockedSet = new Set(props.lockedIds.map((id) => String(id)));
+    const positions = {};
+    const levelKeys = ["bid1", "bid2", "bid3", "ask1", "ask2", "ask3"];
+
+    levelKeys.forEach((levelKey) => {
+      const row = props.volumeData?.[levelKey]?.data?.[0]?.[0];
+      if (!row) return;
+
+      const orders = [];
+      for (let index = 1; row["v" + index] !== undefined; index += 1) {
+        const colKey = "v" + index;
+        const orderId = row[colKey + "_order_local_id"];
+        const volume = row[colKey];
+        if (
+          orderId !== undefined &&
+          orderId !== null &&
+          String(orderId).trim() !== "" &&
+          volume !== undefined &&
+          volume !== null &&
+          String(volume).trim() !== ""
+        ) {
+          orders.push({
+            id: String(orderId),
+            volume: Number.parseFloat(volume) || 0,
+          });
+        }
+      }
+
+      const total = orders.reduce((sum, order) => sum + order.volume, 0);
+      let ahead = 0;
+      orders.forEach((order) => {
+        let behind = total - ahead - order.volume;
+        if (behind < 0) behind = 0;
+        if (lockedSet.has(order.id)) {
+          positions[order.id] = {
+            ahead,
+            behind,
+            orderVolume: order.volume,
+            positionPct: total > 0 ? ((ahead + order.volume / 2) / total) * 100 : null,
+          };
+        }
+        ahead += order.volume;
+      });
+    });
+
+    return positions;
+  });
+
+  // 将当前快照作为序列的右端点，保证右侧曲线、右侧一维轴和左侧统计
+  // 在当前时刻使用同一份订单队列数据；窗口内的历史点仍来自后端采样。
+  const syncCurrentSnapshotPoint = () => {
+    const now = currentMs.value;
+    const currentPositions = currentSnapshotPositions.value;
+    if (!now || !currentSnapshotReady.value) return;
+
+    const nextTracks = {};
+    props.lockedIds.forEach((id) => {
+      const key = String(id);
+      const list = (tracks.value[key] || []).filter((point) => point.t !== now);
+      const current = currentPositions[key];
+      list.push({
+        t: now,
+        ahead: current ? current.ahead : null,
+        behind: current ? current.behind : null,
+        orderVolume: current ? current.orderVolume : null,
+        positionPct: current ? current.positionPct : null,
+      });
+      list.sort((a, b) => a.t - b.t);
+      nextTracks[key] = list;
+    });
+    tracks.value = nextTracks;
+  };
+
   const hasPoints = computed(() =>
     props.lockedIds.some((id) =>
       (tracks.value[id] || []).some((point) => point.ahead != null || point.behind != null),
@@ -227,12 +312,15 @@
   const queueRows = computed(() => {
     const now = currentMs.value;
     return props.lockedIds.map((id, i) => {
-      const list = tracks.value[id] || [];
-      let point = null;
-      for (let index = list.length - 1; index >= 0; index--) {
-        if (list[index].t <= now) {
-          point = list[index];
-          break;
+      const snapshotPoint = currentSnapshotPositions.value[String(id)];
+      let point = currentSnapshotReady.value ? (snapshotPoint || null) : null;
+      if (!currentSnapshotReady.value) {
+        const list = tracks.value[id] || [];
+        for (let index = list.length - 1; index >= 0; index--) {
+          if (list[index].t <= now) {
+            point = list[index];
+            break;
+          }
         }
       }
 
@@ -444,6 +532,10 @@
 
   // 时间 / 窗口变化重新按窗口采样；指标和主题变化只重绘。
   watch([() => props.currentTime, windowMs], () => debouncedFetch());
+  watch([() => props.currentTime, () => props.volumeData], () => {
+    syncCurrentSnapshotPoint();
+    renderChart();
+  });
   watch([metric, () => props.dark], renderChart);
 </script>
 

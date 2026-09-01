@@ -342,3 +342,28 @@ export async function getOrderQueueSeries(params: {
     throw error;
   }
 }
+/**
+ * 获取订单真实成交结果与截至当前回放时刻的预测成交时间
+ */
+export async function getOrderExecutionEstimate(params: {
+  sym: string;
+  date: string;
+  time: string;
+  order_id: number | string;
+}) {
+  try {
+    const response = await defHttp.get(
+      {
+        url: '/tradebook/order_execution_estimate',
+        params,
+      },
+      {
+        joinTime: false,
+      },
+    );
+    return processApiData(response.data);
+  } catch (error) {
+    console.error('Error fetching order execution estimate:', error);
+    throw error;
+  }
+}

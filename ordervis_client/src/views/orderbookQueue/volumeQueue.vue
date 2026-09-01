@@ -185,6 +185,7 @@
               :locked-order-ids="lockedOrderIds"
               :cols="queueCols"
               v-on:toggle-lock="toggleOrderLock"
+            @inspect-execution="openExecutionEstimate"
               :show-tooltip="true"
               @update-fullscreen="showHideTable"
             />
@@ -202,6 +203,7 @@
               :locked-order-ids="lockedOrderIds"
               :cols="queueCols"
               v-on:toggle-lock="toggleOrderLock"
+            @inspect-execution="openExecutionEstimate"
               @update-fullscreen="showHideTable"
             />
             <VolumeDataTable
@@ -218,6 +220,7 @@
               :locked-order-ids="lockedOrderIds"
               :cols="queueCols"
               v-on:toggle-lock="toggleOrderLock"
+            @inspect-execution="openExecutionEstimate"
               @update-fullscreen="showHideTable"
             />
           </div>
@@ -236,6 +239,7 @@
               :locked-order-ids="lockedOrderIds"
               :cols="queueCols"
               v-on:toggle-lock="toggleOrderLock"
+            @inspect-execution="openExecutionEstimate"
               @update-fullscreen="showHideTable"
             />
             <VolumeDataTable
@@ -252,6 +256,7 @@
               :locked-order-ids="lockedOrderIds"
               :cols="queueCols"
               v-on:toggle-lock="toggleOrderLock"
+            @inspect-execution="openExecutionEstimate"
               @update-fullscreen="showHideTable"
             />
             <VolumeDataTable
@@ -268,6 +273,7 @@
               :locked-order-ids="lockedOrderIds"
               :cols="queueCols"
               v-on:toggle-lock="toggleOrderLock"
+            @inspect-execution="openExecutionEstimate"
               @update-fullscreen="showHideTable"
             />
           </div>
@@ -338,15 +344,149 @@
       @close="lockSelectorVisible = false"
       @confirm="handleLockConfirm"
     />
+    <Modal
+      :visible="executionEstimateVisible"
+      :title="executionEstimateTitle"
+      width="760px"
+      :footer="null"
+      centered
+      destroy-on-close
+      @cancel="closeExecutionEstimate"
+      @update:visible="(visible) => { if (!visible) closeExecutionEstimate() }"
+    >
+      <Spin :spinning="executionEstimateLoading" tip="正在分析订单成交速度…">
+        <div class="execution-estimate-body">
+          <div v-if="executionEstimateError" class="estimate-error">
+            {{ executionEstimateError }}
+          </div>
+
+          <template v-else-if="executionEstimateData">
+            <div class="estimate-order-summary">
+              <div>
+                <span>方向</span>
+                <b :class="executionEstimateData.order?.side === 1 ? 'bid-text' : 'ask-text'">
+                  {{ executionEstimateData.order?.side === 1 ? '买' : '卖' }}
+                </b>
+              </div>
+              <div><span>价格</span><b>{{ formatEstimatePrice(executionEstimateData.order?.price) }}</b></div>
+              <div><span>原始数量</span><b>{{ formatEstimateVolume(executionEstimateData.order?.size) }} 手</b></div>
+              <div><span>预测时点</span><b>{{ formatExecutionTime(executionEstimateData.as_of_time) }}</b></div>
+            </div>
+
+            <section class="estimate-section prediction-section">
+              <div class="estimate-section-title">
+                <span>预测成交时间</span>
+                <span
+                  v-if="executionEstimateData.prediction?.confidence"
+                  class="confidence-badge"
+                  :class="'confidence-' + executionEstimateData.prediction.confidence"
+                >
+                  可信度 {{ confidenceLabels[executionEstimateData.prediction.confidence] || '--' }}
+                </span>
+              </div>
+
+              <div v-if="executionEstimateData.prediction?.available" class="estimate-time-grid">
+                <div class="estimate-time-card">
+                  <span>{{ executionEstimateData.prediction.has_filled_as_of ? '预计再次成交' : '预计首次成交' }}</span>
+                  <strong>
+                    {{
+                      executionEstimateData.prediction.first_fill_beyond_close
+                        ? '超过当日收盘'
+                        : formatExecutionTime(executionEstimateData.prediction.first_fill_time)
+                    }}
+                  </strong>
+                  <small>
+                    还需
+                    {{
+                      formatEstimateWait(
+                        executionEstimateData.prediction.first_fill_wait_ms,
+                        executionEstimateData.prediction.first_fill_beyond_close,
+                      )
+                    }}
+                  </small>
+                </div>
+                <div class="estimate-time-card">
+                  <span>预计全部成交</span>
+                  <strong>
+                    {{
+                      executionEstimateData.prediction.full_fill_beyond_close
+                        ? '超过当日收盘'
+                        : formatExecutionTime(executionEstimateData.prediction.full_fill_time)
+                    }}
+                  </strong>
+                  <small>
+                    还需
+                    {{
+                      formatEstimateWait(
+                        executionEstimateData.prediction.full_fill_wait_ms,
+                        executionEstimateData.prediction.full_fill_beyond_close,
+                      )
+                    }}
+                  </small>
+                </div>
+              </div>
+              <div v-else class="estimate-unavailable">
+                {{ executionEstimateData.prediction?.reason || executionEstimateData.prediction?.warnings?.[0] || '当前样本不足，无法预测' }}
+              </div>
+
+              <div v-if="executionEstimateData.current_queue" class="estimate-detail-grid">
+                <div><span>当前档位</span><b>{{ executionEstimateData.current_queue.level || '--' }}</b></div>
+                <div><span>当前身前量</span><b>{{ formatEstimateVolume(executionEstimateData.current_queue.ahead_volume) }} 手</b></div>
+                <div><span>本单剩余量</span><b>{{ formatEstimateVolume(executionEstimateData.current_queue.remaining_volume) }} 手</b></div>
+                <div><span>截至当前已成交</span><b>{{ formatEstimateVolume(executionEstimateData.prediction?.filled_volume_as_of) }} 手</b></div>
+                <div><span>价格状态</span><b>{{ executionEstimateData.prediction?.price_active ? '当前最优价' : '当前非最优价' }}</b></div>
+                <div><span>身前消耗速度</span><b>{{ formatEstimateRate(executionEstimateData.prediction?.queue_depletion_rate) }}</b></div>
+                <div><span>同价成交速度</span><b>{{ formatEstimateRate(executionEstimateData.prediction?.same_price_trade_rate) }}</b></div>
+              </div>
+
+              <div v-if="executionEstimateData.prediction?.basis" class="estimate-basis">
+                统计依据：身前队列窗口
+                {{ formatEstimateWindow(executionEstimateData.prediction.basis.queue_window_ms) }}
+                （观察 {{ Number(executionEstimateData.prediction.basis.queue_observed_seconds || 0).toFixed(1) }} 秒，
+                消耗 {{ formatEstimateVolume(executionEstimateData.prediction.basis.queue_depleted_volume) }} 手）；
+                同价成交窗口 {{ formatEstimateWindow(executionEstimateData.prediction.basis.trade_window_ms) }}
+                （{{ executionEstimateData.prediction.basis.trade_count || 0 }} 笔，
+                {{ formatEstimateVolume(executionEstimateData.prediction.basis.trade_volume) }} 手）。
+              </div>
+              <ul v-if="executionEstimateData.prediction?.warnings?.length" class="estimate-warnings">
+                <li v-for="warning in executionEstimateData.prediction.warnings" :key="warning">{{ warning }}</li>
+              </ul>
+            </section>
+
+            <section class="estimate-section actual-section">
+              <div class="estimate-section-title">真实成交结果（完整交易日）</div>
+              <div class="estimate-detail-grid">
+                <div><span>最终结果</span><b>{{ executionEstimateData.actual?.outcome || '--' }}</b></div>
+                <div><span>真实首次成交</span><b>{{ formatExecutionTime(executionEstimateData.actual?.first_fill_time) }}</b></div>
+                <div><span>真实全部成交</span><b>{{ formatExecutionTime(executionEstimateData.actual?.full_fill_time) }}</b></div>
+                <div><span>最后一次成交</span><b>{{ formatExecutionTime(executionEstimateData.actual?.last_fill_time) }}</b></div>
+                <div><span>撤单时间</span><b>{{ formatExecutionTime(executionEstimateData.actual?.cancel_time) }}</b></div>
+                <div><span>成交次数</span><b>{{ executionEstimateData.actual?.trade_count || 0 }} 次</b></div>
+                <div><span>实际成交量</span><b>{{ formatEstimateVolume(executionEstimateData.actual?.filled_volume) }} 手</b></div>
+                <div><span>实际撤单量</span><b>{{ formatEstimateVolume(executionEstimateData.actual?.cancelled_volume) }} 手</b></div>
+              </div>
+            </section>
+
+            <div class="estimate-footnote">
+              预测严格只使用 {{ formatExecutionTime(executionEstimateData.as_of_time) }} 及之前的数据；
+              “真实成交结果”单独读取完整交易日，仅用于事后对照，不参与预测。
+            </div>
+          </template>
+
+          <div v-else-if="!executionEstimateLoading" class="estimate-empty">暂无分析数据</div>
+        </div>
+      </Spin>
+    </Modal>
+
   </div>
 </template>
 
 <script lang="js" setup>
     import { ref, computed, onMounted, onUnmounted, watch, h, nextTick } from 'vue';
     import { useRoute, useRouter } from 'vue-router';
-    import { Table, Empty, Spin, Radio, Button, Select, Input, Tooltip, Progress, Switch, Popover, Popconfirm } from 'ant-design-vue';
+    import { Table, Empty, Spin, Radio, Button, Select, Input, Tooltip, Progress, Switch, Popover, Popconfirm, Modal } from 'ant-design-vue';
   import { QuestionCircleOutlined } from '@ant-design/icons-vue';
-    import { getSymList, getDateList, getVolumeData, getDatetimeList, getVolumeDataByTime, getSnapshotById, getSnapshotByIndex, getSnapshotByTime, getPastTimeTradeInfo, getNextChange, initTradeBook, getProgress, checkServerStatus } from '/@/api/orderbook/orderbook';
+    import { getSymList, getDateList, getVolumeData, getDatetimeList, getVolumeDataByTime, getSnapshotById, getSnapshotByIndex, getSnapshotByTime, getPastTimeTradeInfo, getNextChange, initTradeBook, getProgress, checkServerStatus, getOrderExecutionEstimate } from '/@/api/orderbook/orderbook';
 
     // 调试日志：仅开发环境且 localStorage.ov_debug === '1' 时输出，
     // 生产构建静默（替代原先 120+ 处无条件 console.log）
@@ -647,6 +787,14 @@
     const lockByVolumeValue = ref('');
     const lockByIdValue = ref('');
     const lockedOrderIds = ref([]);
+
+    // 右键订单成交时间分析弹窗
+    const executionEstimateVisible = ref(false);
+    const executionEstimateLoading = ref(false);
+    const executionEstimateError = ref('');
+    const executionEstimateData = ref(null);
+    const executionEstimateOrder = ref(null);
+    let executionEstimateRequestSeq = 0;
     
     // 订单锁定进度状态
     const lockProgress = ref({
@@ -1327,7 +1475,8 @@
 
           // 构建volumeData格式
           volumeData.value = {
-            datetime: res.data.time || '',
+            // 使用快照实际时间，保证右侧当前点与左侧表格属于同一时刻。
+            datetime: snapshot.timestamp || res.data.time || '',
             is_ETF: isETF.value,
             ask1: transformOrdersToTableData(levels.ask1?.orders || [], levels.ask1?.price),
             ask1_price: levels.ask1?.price || 0,
@@ -2065,6 +2214,105 @@
         
         return found;
        };
+
+     const confidenceLabels = {
+       high: '高',
+       medium: '中',
+       low: '低',
+     };
+
+     const executionEstimateTitle = computed(() => {
+       const id = executionEstimateOrder.value?.order_local_id;
+       return id ? '订单 ' + id + ' 成交时间分析' : '订单成交时间分析';
+     });
+
+     const formatExecutionTime = (value) => {
+       if (!value) return '--';
+       return String(value).split(' ').pop() || '--';
+     };
+
+     const formatEstimateVolume = (value) => {
+       const numeric = Number(value);
+       if (!Number.isFinite(numeric)) return '--';
+       return numeric.toLocaleString('zh-CN', { maximumFractionDigits: 2 });
+     };
+
+     const formatEstimateRate = (value) => {
+       const numeric = Number(value);
+       if (!Number.isFinite(numeric) || numeric <= 0) return '--';
+       return numeric.toLocaleString('zh-CN', { maximumFractionDigits: 2 }) + ' 手/秒';
+     };
+
+     const formatEstimateWindow = (value) => {
+       const ms = Number(value);
+       if (!Number.isFinite(ms) || ms <= 0) return '--';
+       if (ms >= 60000) return (ms / 60000).toFixed(ms % 60000 === 0 ? 0 : 1) + ' 分钟';
+       return (ms / 1000).toFixed(ms % 1000 === 0 ? 0 : 1) + ' 秒';
+     };
+
+     const formatEstimateWait = (value, beyondClose = false) => {
+       if (beyondClose) return '超过当日收盘';
+       const ms = Number(value);
+       if (!Number.isFinite(ms) || ms < 0) return '--';
+       if (ms < 1000) return Math.round(ms) + ' 毫秒';
+       const totalSeconds = Math.round(ms / 1000);
+       if (totalSeconds < 60) return totalSeconds + ' 秒';
+       const hours = Math.floor(totalSeconds / 3600);
+       const minutes = Math.floor((totalSeconds % 3600) / 60);
+       const seconds = totalSeconds % 60;
+       if (hours > 0) return hours + ' 小时 ' + minutes + ' 分';
+       return minutes + ' 分 ' + seconds + ' 秒';
+     };
+
+     const formatEstimatePrice = (value) => {
+       const numeric = Number(value);
+       if (!Number.isFinite(numeric)) return '--';
+       return numeric.toFixed(isETF.value ? 3 : 2);
+     };
+
+     const closeExecutionEstimate = () => {
+       executionEstimateVisible.value = false;
+       executionEstimateRequestSeq += 1;
+       executionEstimateLoading.value = false;
+     };
+
+     const openExecutionEstimate = async (order) => {
+       const orderId = order?.order_local_id;
+       if (!orderId || !selectSym.value || !selectDate.value || !selectTime.value) {
+         createMessage.warning('当前订单或回放时间不完整，无法计算成交时间');
+         return;
+       }
+
+       const seq = ++executionEstimateRequestSeq;
+       executionEstimateOrder.value = order;
+       executionEstimateData.value = null;
+       executionEstimateError.value = '';
+       executionEstimateLoading.value = true;
+       executionEstimateVisible.value = true;
+
+       try {
+         const response = await getOrderExecutionEstimate({
+           sym: selectSym.value,
+           date: selectDate.value,
+           time: selectTime.value,
+           order_id: orderId,
+         });
+         if (seq !== executionEstimateRequestSeq) return;
+         if (response.code === 0 && response.data) {
+           executionEstimateData.value = response.data;
+         } else {
+           executionEstimateError.value = response.message || '订单成交时间分析失败';
+         }
+       } catch (error) {
+         if (seq === executionEstimateRequestSeq) {
+           executionEstimateError.value = '订单成交时间分析失败，请检查后端服务';
+         }
+       } finally {
+         if (seq === executionEstimateRequestSeq) {
+           executionEstimateLoading.value = false;
+         }
+       }
+     };
 
      const toggleOrderLock = (order) => {
        const rawId = order && order.order_local_id;
@@ -3569,4 +3817,192 @@
       box-shadow: 0 0 8px rgba(24, 144, 255, 0.8);
     }
   }
+  .execution-estimate-body {
+    min-height: 180px;
+    color: #344054;
+  }
+
+  .execution-estimate-body :deep(.ant-spin-nested-loading),
+  .execution-estimate-body :deep(.ant-spin-container) {
+    min-height: 180px;
+  }
+
+  .estimate-error,
+  .estimate-unavailable,
+  .estimate-empty {
+    padding: 28px 16px;
+    border: 1px dashed #d0d5dd;
+    border-radius: 6px;
+    color: #667085;
+    text-align: center;
+  }
+
+  .estimate-error {
+    border-color: #ffccc7;
+    color: #cf1322;
+    background: #fff2f0;
+  }
+
+  .estimate-order-summary {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 8px;
+    margin-bottom: 12px;
+  }
+
+  .estimate-order-summary > div,
+  .estimate-detail-grid > div {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    min-width: 0;
+    padding: 8px 10px;
+    border-radius: 5px;
+    background: #f7f9fc;
+  }
+
+  .estimate-order-summary span,
+  .estimate-detail-grid span {
+    color: #667085;
+    font-size: 11px;
+  }
+
+  .estimate-order-summary b,
+  .estimate-detail-grid b {
+    overflow: hidden;
+    color: #1d2939;
+    font-size: 13px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .estimate-order-summary .bid-text {
+    color: #f5222d;
+  }
+
+  .estimate-order-summary .ask-text {
+    color: #52c41a;
+  }
+
+  .estimate-section {
+    margin-top: 12px;
+    padding: 12px;
+    border: 1px solid #e4e7ec;
+    border-radius: 7px;
+  }
+
+  .prediction-section {
+    border-color: #b7d7ff;
+    background: #f8fbff;
+  }
+
+  .actual-section {
+    background: #fcfcfd;
+  }
+
+  .estimate-section-title {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 10px;
+    color: #1d2939;
+    font-size: 14px;
+    font-weight: 600;
+  }
+
+  .confidence-badge {
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-size: 11px;
+    font-weight: 500;
+  }
+
+  .confidence-high {
+    color: #027a48;
+    background: #d1fadf;
+  }
+
+  .confidence-medium {
+    color: #b54708;
+    background: #fef0c7;
+  }
+
+  .confidence-low {
+    color: #b42318;
+    background: #fee4e2;
+  }
+
+  .estimate-time-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+    margin-bottom: 10px;
+  }
+
+  .estimate-time-card {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    padding: 12px;
+    border: 1px solid #d1e9ff;
+    border-radius: 6px;
+    background: #fff;
+  }
+
+  .estimate-time-card span {
+    color: #667085;
+    font-size: 11px;
+  }
+
+  .estimate-time-card strong {
+    color: #175cd3;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 20px;
+  }
+
+  .estimate-time-card small {
+    color: #475467;
+  }
+
+  .estimate-detail-grid {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 7px;
+  }
+
+  .estimate-basis {
+    margin-top: 10px;
+    padding: 8px 10px;
+    border-radius: 5px;
+    color: #475467;
+    font-size: 11px;
+    line-height: 1.6;
+    background: rgb(255 255 255 / 70%);
+  }
+
+  .estimate-warnings {
+    margin: 8px 0 0;
+    padding-left: 20px;
+    color: #b54708;
+    font-size: 11px;
+  }
+
+  .estimate-footnote {
+    margin-top: 10px;
+    color: #667085;
+    font-size: 11px;
+    line-height: 1.5;
+  }
+
+  @media (max-width: 760px) {
+    .estimate-order-summary,
+    .estimate-detail-grid {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .estimate-time-grid {
+      grid-template-columns: minmax(0, 1fr);
+    }
+  }
+
 </style>

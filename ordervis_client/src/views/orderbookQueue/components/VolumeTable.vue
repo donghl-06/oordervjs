@@ -66,6 +66,7 @@
             :class="{ highlighted: isHighlighted(order), clickable: !!order.order_local_id }"
             :style="getCellStyle(order)"
             v-on:click="toggleLock(order)"
+            @contextmenu.prevent.stop="inspectExecution(order)"
           >
             {{ order.remaining_volume || '' }}
           </div>
@@ -115,7 +116,7 @@
     },
   });
 
-  const emit = defineEmits(['update-fullscreen', 'toggle-lock']);
+  const emit = defineEmits(['update-fullscreen', 'toggle-lock', 'inspect-execution']);
 
   // 锁定订单 ID 集合（Set 查询 O(1)，替代数组线性 some）
   const lockedIdSet = computed(() => {
@@ -176,6 +177,11 @@
     emit('toggle-lock', order);
   };
 
+  const inspectExecution = (order) => {
+    if (!order || !order.order_local_id) return;
+    emit('inspect-execution', { ...order, tableKey: props.tableKey });
+  };
+
   // D3 热力梯度：格子底色深度 ∝ 订单量 / 当前档位最大单量
   const maxCellVolume = computed(() => {
     let max = 0;
@@ -210,6 +216,7 @@
     const tooltip = [
       `订单ID: ${orderId || '暂无数据'}`,
       `创建时间: ${createTime || '暂无数据'}`,
+      '右键查看成交时间分析',
     ];
 
     return tooltip.join('\n');

@@ -11,7 +11,7 @@ import threading
 from datetime import datetime, timedelta
 from typing import Dict, Optional, List
 
-from .tradebook import TradeBook
+from .tradebook import TradeBook, DEFAULT_DATA_PATH
 from .adata_session import ensure_adata_session_or_raise
 from .progress_manager import progress_manager, create_progress_callback
 from ordervis_server.package import backend_logger
@@ -28,6 +28,10 @@ def is_orderbook_fund_code(symbol: str) -> bool:
 def is_otc_fund_code(symbol: str) -> bool:
     """判断是否为场外基金代码（.OF），此类标的没有本页面需要的订单簿数据。"""
     return str(symbol or "").strip().upper().endswith(".OF")
+
+
+DATA_PATH = DEFAULT_DATA_PATH
+os.makedirs(DATA_PATH, exist_ok=True)
 
 
 class SharedTradeBookStorage:    
@@ -139,13 +143,13 @@ class SharedTradeBookStorage:
                     ) from exc
                 raise
 
-        cstra_path = f"data/cstra_{symbol}_{date}.csv"
+        cstra_path = os.path.join(DATA_PATH, f"cstra_{symbol}_{date}.csv")
         if not os.path.exists(cstra_path):
             self.logger.n_log(f"获取并转换 cstra 数据: {symbol}_{date}", self.log_level.INFO)
             cstra_df = fetch_required(get_cstra_ad, "逐笔成交")
             save_to_csv(cstra_df, cstra_path)
 
-        csord_path = f"data/csord_{symbol}_{date}.csv"
+        csord_path = os.path.join(DATA_PATH, f"csord_{symbol}_{date}.csv")
         if not os.path.exists(csord_path):
             self.logger.n_log(f"获取并转换 csord 数据: {symbol}_{date}", self.log_level.INFO)
             csord_df = fetch_required(get_csord_ad, "逐笔委托")
@@ -155,7 +159,7 @@ class SharedTradeBookStorage:
                 engine = sh_revert_module.RecoverEngine()
                 csord_df = engine.recover(csord_path, cstra_path, csord_path)
 
-        cstick_path = f"data/cstick_{symbol}_{date}.csv"
+        cstick_path = os.path.join(DATA_PATH, f"cstick_{symbol}_{date}.csv")
         if not os.path.exists(cstick_path):
             self.logger.n_log(f"获取并转换 cstick 数据: {symbol}_{date}", self.log_level.INFO)
             cstick_df = fetch_required(get_cstick_ad, "盘口快照")
@@ -196,7 +200,7 @@ class SharedTradeBookStorage:
         try:
             if not self.exists(symbol, date):
                 self._get_data_db(symbol, date)
-                self._put(TradeBook(symbol, date, "./data/", is_ETF=is_etf))
+                self._put(TradeBook(symbol, date, DATA_PATH, is_ETF=is_etf))
         except Exception as e:
             self.logger.n_log(f"获取数据文件失败: {key}, 错误: {e}", self.log_level.ERROR)
             return None
@@ -216,7 +220,7 @@ class SharedTradeBookStorage:
                 
                 # 创建新的TradeBook对象
                 self.logger.n_log(f"创建新的TradeBook: {key}", self.log_level.INFO)
-                tradebook = TradeBook(symbol, date, "./data/", is_ETF=is_etf)
+                tradebook = TradeBook(symbol, date, DATA_PATH, is_ETF=is_etf)
                 self.local_cache[key] = tradebook
                 return tradebook
                 
@@ -259,7 +263,7 @@ class SharedTradeBookStorage:
                 
                 # 创建TradeBook实例
                 self.logger.n_log(f"[DEBUG] 开始创建TradeBook, is_ETF={is_etf}", self.log_level.DEBUG)
-                tradebook = TradeBook.create_with_progress(symbol, date, "./data/", callback, is_ETF=is_etf)
+                tradebook = TradeBook.create_with_progress(symbol, date, DATA_PATH, callback, is_ETF=is_etf)
                 
                 # 存储到缓存
                 with self.local_lock:

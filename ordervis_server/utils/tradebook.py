@@ -32,8 +32,13 @@ def _ms_to_time(ms_value: int) -> str:
     return f"{h:02d}:{m:02d}:{s:02d}.{ms:03d}"
 
 
+# 默认数据目录固定到服务端目录，不依赖启动时的当前工作目录。
+DEFAULT_DATA_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'data'))
+os.makedirs(DEFAULT_DATA_PATH, exist_ok=True)
+
+
 class TradeBook:
-    def __init__(self, symbol: str, date: str, data_path: str = "./data/", progress_callback: Optional[Callable] = None, is_ETF: bool = False):
+    def __init__(self, symbol: str, date: str, data_path: str = DEFAULT_DATA_PATH, progress_callback: Optional[Callable] = None, is_ETF: bool = False):
         """初始化TradeBook"""
         self.symbol = symbol
         self.date = date
@@ -65,6 +70,8 @@ class TradeBook:
         self._order_price_map: Optional[Dict[int, float]] = None
         self._best_cancel_records: Optional[List[Dict]] = None
         self._trade_price_records: Optional[List[Dict]] = None
+        self._order_meta_map: Optional[Dict[int, Dict[str, Any]]] = None
+        self._passive_trade_records: Optional[List[Dict[str, Any]]] = None
 
         # 后台构建 create_time 映射，不阻塞初始化
         threading.Thread(target=self._build_order_time_map, daemon=True).start()
@@ -365,7 +372,7 @@ class TradeBook:
         return series
 
     @classmethod
-    def create_with_progress(cls, symbol: str, date: str, data_path: str = "./data/", progress_callback: Optional[Callable] = None, is_ETF: bool = False):
+    def create_with_progress(cls, symbol: str, date: str, data_path: str = DEFAULT_DATA_PATH, progress_callback: Optional[Callable] = None, is_ETF: bool = False):
         """
         创建TradeBook实例的工厂方法，支持进度回调
         """
@@ -550,7 +557,7 @@ class TradeBook:
                 return {}
             wanted = {int(order_id) for order_id in order_ids}
             positions = {}
-            for level in snap.get('levels', {}).values():
+            for level_key, level in snap.get('levels', {}).items():
                 orders = level.get('orders', [])
                 for i, o in enumerate(orders):
                     try:
@@ -561,6 +568,8 @@ class TradeBook:
                         ahead = sum(int(x.get('remaining_volume', 0)) for x in orders[:i])
                         behind = sum(int(x.get('remaining_volume', 0)) for x in orders[i + 1:])
                         positions[current_id] = {
+                            'level': level_key,
+                            'price': level.get('price'),
                             'position': i + 1,
                             'level_order_count': len(orders),
                             'remaining_volume': float(o.get('remaining_volume', 0) or 0),
@@ -608,6 +617,363 @@ class TradeBook:
             })
         return series
 
+    def _ensure_execution_prediction_cache(self):
+        """构建订单元数据和被动挂单成交记录，供成交时间预测复用。"""
+        self._load_tick_data()
+        if self._order_meta_map is None:
+            order_meta: Dict[int, Dict[str, Any]] = {}
+            if self._csord_df is not None:
+                for _, row in self._csord_df.iterrows():
+                    try:
+                        order_id = int(row['orderid'])
+                        timestamp = pd.Timestamp(row['datetime'])
+                        time_ms = (
+                            timestamp.hour * 3600000
+                            + timestamp.minute * 60000
+                            + timestamp.second * 1000
+                            + timestamp.microsecond // 1000
+                        )
+                        order_meta[order_id] = {
+                            'time_ms': time_ms,
+                            'side': int(row['side']),
+                            'price': float(row['price']),
+                        }
+                    except (TypeError, ValueError, KeyError):
+                        continue
+            self._order_meta_map = order_meta
+
+        if self._passive_trade_records is not None:
+            return
+
+        records: List[Dict[str, Any]] = []
+        if self._cstra_df is not None:
+            exectypes = self._cstra_df['exectype'].astype(str).map(self._clean_exectype)
+            trades = self._cstra_df[exectypes == '1']
+            order_meta = self._order_meta_map or {}
+            for _, row in trades.iterrows():
+                try:
+                    timestamp = pd.Timestamp(row['datetime'])
+                    time_ms = (
+                        timestamp.hour * 3600000
+                        + timestamp.minute * 60000
+                        + timestamp.second * 1000
+                        + timestamp.microsecond // 1000
+                    )
+                    bid_id = int(row['bidorderid'])
+                    ask_id = int(row['askorderid'])
+                    flag = self._clean_exectype(row.get('tradebsflag', '0')).upper()
+
+                    # B/S 表示主动买/主动卖；部分市场（如上交所）恒为 0，
+                    # 此时用双方订单创建先后判断较早进入盘口的被动侧。
+                    passive_side = None
+                    if flag == 'B':
+                        passive_side = -1
+                    elif flag == 'S':
+                        passive_side = 1
+                    else:
+                        bid_meta = order_meta.get(bid_id)
+                        ask_meta = order_meta.get(ask_id)
+                        if bid_meta and ask_meta:
+                            if bid_meta['time_ms'] < ask_meta['time_ms']:
+                                passive_side = 1
+                            elif ask_meta['time_ms'] < bid_meta['time_ms']:
+                                passive_side = -1
+
+                    if passive_side is None:
+                        continue
+                    volume = float(row['size'])
+                    price = float(row['price'])
+                    if volume <= 0 or price <= 0:
+                        continue
+                    records.append({
+                        'time_ms': time_ms,
+                        'side': passive_side,
+                        'price': price,
+                        'volume': volume,
+                    })
+                except (TypeError, ValueError, KeyError):
+                    continue
+        self._passive_trade_records = sorted(records, key=lambda item: item['time_ms'])
+
+    @staticmethod
+    def _session_start_for_time(time_ms: int) -> int:
+        afternoon_start = 13 * 3600000
+        return afternoon_start if time_ms >= afternoon_start else CONTINUOUS_AUCTION_START_MS
+
+    def _queue_depletion_sample(
+        self,
+        order_id: int,
+        end_ms: int,
+        window_ms: int,
+        create_ms: int,
+    ) -> Dict[str, Any]:
+        """估计订单身前队列消耗速度；身前撤单和成交都会计入有效消耗。"""
+        start_ms = max(
+            end_ms - window_ms,
+            self._session_start_for_time(end_ms),
+            create_ms,
+        )
+        duration_ms = max(0, end_ms - start_ms)
+        if duration_ms <= 0:
+            return {
+                'window_ms': window_ms,
+                'actual_window_ms': 0,
+                'rate': 0.0,
+                'depleted_volume': 0.0,
+                'observed_seconds': 0.0,
+                'valid_samples': 0,
+            }
+
+        points = max(6, min(60, int(duration_ms / 500)))
+        step = duration_ms / points
+        weighted_depletion = 0.0
+        weighted_seconds = 0.0
+        raw_depletion = 0.0
+        observed_seconds = 0.0
+        valid_samples = 0
+        previous = None
+        half_life_seconds = max(5.0, duration_ms / 3000)
+
+        for index in range(points + 1):
+            sample_ms = round(start_ms + index * step)
+            position = self._queue_position_at(_ms_to_time(sample_ms), order_id)
+            if position is None:
+                previous = None
+                continue
+
+            valid_samples += 1
+            current_ahead = float(position.get('ahead_volume', 0) or 0)
+            if previous is not None:
+                previous_ms, previous_ahead = previous
+                elapsed_seconds = max(0.0, (sample_ms - previous_ms) / 1000)
+                if elapsed_seconds > 0:
+                    depletion = max(0.0, previous_ahead - current_ahead)
+                    age_seconds = max(0.0, (end_ms - sample_ms) / 1000)
+                    weight = 0.5 ** (age_seconds / half_life_seconds)
+                    weighted_depletion += depletion * weight
+                    weighted_seconds += elapsed_seconds * weight
+                    raw_depletion += depletion
+                    observed_seconds += elapsed_seconds
+            previous = (sample_ms, current_ahead)
+
+        return {
+            'window_ms': window_ms,
+            'actual_window_ms': duration_ms,
+            'rate': weighted_depletion / weighted_seconds if weighted_seconds > 0 else 0.0,
+            'depleted_volume': raw_depletion,
+            'observed_seconds': observed_seconds,
+            'valid_samples': valid_samples,
+        }
+
+    def _same_price_trade_sample(
+        self,
+        side: int,
+        price: float,
+        end_ms: int,
+        window_ms: int,
+    ) -> Dict[str, Any]:
+        """统计当前会话内同价格、同被动挂单方向的成交服务速度。"""
+        start_ms = max(end_ms - window_ms, self._session_start_for_time(end_ms))
+        elapsed_seconds = max(0.0, (end_ms - start_ms) / 1000)
+        matching = [
+            record for record in (self._passive_trade_records or [])
+            if start_ms < record['time_ms'] <= end_ms
+            and record['side'] == side
+            and abs(record['price'] - price) < 0.000001
+        ]
+        volume = sum(record['volume'] for record in matching)
+        return {
+            'window_ms': window_ms,
+            'actual_window_ms': end_ms - start_ms,
+            'rate': volume / elapsed_seconds if elapsed_seconds > 0 else 0.0,
+            'trade_volume': volume,
+            'trade_count': len(matching),
+            'average_trade_size': volume / len(matching) if matching else 0.0,
+        }
+
+    @staticmethod
+    def _select_adaptive_sample(samples: List[Dict[str, Any]], sample_type: str) -> Dict[str, Any]:
+        if sample_type == 'trade':
+            for sample in samples:
+                if sample['trade_count'] >= 3:
+                    return sample
+            for sample in reversed(samples):
+                if sample['trade_count'] > 0:
+                    return sample
+        else:
+            for sample in samples:
+                if sample['rate'] > 0 and sample['observed_seconds'] >= 5:
+                    return sample
+            for sample in reversed(samples):
+                if sample['valid_samples'] >= 2:
+                    return sample
+        return samples[-1]
+
+    @staticmethod
+    def _add_trading_wait(time_str: str, wait_seconds: Optional[float]) -> Dict[str, Any]:
+        """在当日连续竞价时段内增加等待时间，自动跳过午休。"""
+        if wait_seconds is None:
+            return {'time': None, 'beyond_close': False}
+        current_ms = _time_to_ms(time_str)
+        remaining_ms = max(0, round(wait_seconds * 1000))
+        morning_start = 9 * 3600000 + 30 * 60000
+        morning_end = 11 * 3600000 + 30 * 60000
+        afternoon_start = 13 * 3600000
+        close_ms = 15 * 3600000
+
+        if current_ms < morning_start:
+            current_ms = morning_start
+        if morning_end <= current_ms < afternoon_start:
+            current_ms = afternoon_start
+
+        while remaining_ms > 0:
+            session_end = morning_end if current_ms < morning_end else close_ms
+            available = max(0, session_end - current_ms)
+            if remaining_ms <= available:
+                return {'time': _ms_to_time(current_ms + remaining_ms), 'beyond_close': False}
+            remaining_ms -= available
+            if session_end == morning_end:
+                current_ms = afternoon_start
+            else:
+                return {'time': None, 'beyond_close': True}
+        return {'time': _ms_to_time(current_ms), 'beyond_close': False}
+
+    def get_order_execution_estimate(self, time_str: str, order_id: int) -> Dict[str, Any]:
+        """返回订单真实成交结果和仅使用 time_str 之前数据计算的成交时间预测。"""
+        self.update_access_time()
+        lifecycle = self.get_order_lifecycle(order_id)
+        if not lifecycle.get('success'):
+            return lifecycle
+
+        self._ensure_execution_prediction_cache()
+        summary = lifecycle['summary']
+        events = lifecycle['events']
+        trade_events = [event for event in events if event['type'] == 'trade']
+        cancel_events = [event for event in events if event['type'] == 'cancel']
+        full_fill_event = next(
+            (event for event in trade_events if event.get('remaining_after', 1) <= 0),
+            None,
+        )
+        actual = {
+            'outcome': summary.get('outcome'),
+            'first_fill_time': trade_events[0]['time'] if trade_events else None,
+            'last_fill_time': trade_events[-1]['time'] if trade_events else None,
+            'full_fill_time': full_fill_event['time'] if full_fill_event else None,
+            'cancel_time': cancel_events[-1]['time'] if cancel_events else None,
+            'filled_volume': summary.get('filled_size', 0),
+            'cancelled_volume': summary.get('cancelled_size', 0),
+            'trade_count': len(trade_events),
+        }
+
+        end_ms = _time_to_ms(time_str)
+        past_trade_events = [
+            event for event in trade_events
+            if _time_to_ms(event['time'].split(' ')[-1]) <= end_ms
+        ]
+        has_filled_as_of = bool(past_trade_events)
+        filled_volume_as_of = sum(float(event.get('size', 0) or 0) for event in past_trade_events)
+        current_position = self._queue_position_at(time_str, order_id)
+        meta = (self._order_meta_map or {}).get(order_id)
+        if current_position is None or meta is None:
+            return {
+                'success': True,
+                'order': summary,
+                'as_of_time': time_str,
+                'actual': actual,
+                'prediction': {
+                    'available': False,
+                    'reason': '订单在当前快照六档盘口中不可见，无法取得当前身前量',
+                    'lookahead_safe': True,
+                },
+            }
+
+        candidate_windows = [30000, 120000, 600000]
+        queue_samples = [
+            self._queue_depletion_sample(order_id, end_ms, window, meta['time_ms'])
+            for window in candidate_windows
+        ]
+        trade_samples = [
+            self._same_price_trade_sample(meta['side'], meta['price'], end_ms, window)
+            for window in candidate_windows
+        ]
+        queue_sample = self._select_adaptive_sample(queue_samples, 'queue')
+        trade_sample = self._select_adaptive_sample(trade_samples, 'trade')
+
+        ahead_volume = float(current_position.get('ahead_volume', 0) or 0)
+        remaining_volume = float(current_position.get('remaining_volume', 0) or 0)
+        queue_rate = float(queue_sample.get('rate', 0) or 0)
+        trade_rate = float(trade_sample.get('rate', 0) or 0)
+        effective_queue_rate = queue_rate if queue_rate > 0 else trade_rate
+        warnings = []
+
+        if trade_rate <= 0:
+            first_wait = None
+            full_wait = None
+            warnings.append('统计窗口内没有可识别的同价位成交，暂时无法给出成交时间')
+        else:
+            queue_wait = ahead_volume / effective_queue_rate if effective_queue_rate > 0 else None
+            if queue_wait is None:
+                first_wait = None
+                full_wait = None
+            else:
+                average_trade_size = float(trade_sample.get('average_trade_size', 0) or 0)
+                typical_fill = min(remaining_volume, average_trade_size or remaining_volume)
+                first_wait = queue_wait + typical_fill / trade_rate
+                full_wait = queue_wait + remaining_volume / trade_rate
+
+        level_key = str(current_position.get('level') or '')
+        price_active = level_key in ('bid1', 'ask1')
+        if not price_active:
+            warnings.append('订单当前不在最优价，预测已包含近期无成交时段，但未单独预测价格何时到达该档位')
+        if queue_rate <= 0:
+            warnings.append('近期未观察到身前量下降，身前等待部分使用同价位成交速度估算')
+
+        trade_count = int(trade_sample.get('trade_count', 0) or 0)
+        observed_seconds = float(queue_sample.get('observed_seconds', 0) or 0)
+        if trade_count >= 10 and observed_seconds >= 15:
+            confidence = 'high'
+        elif trade_count >= 3 or (trade_count > 0 and queue_rate > 0):
+            confidence = 'medium'
+        else:
+            confidence = 'low'
+        if not price_active and confidence == 'high':
+            confidence = 'medium'
+
+        first_clock = self._add_trading_wait(time_str, first_wait)
+        full_clock = self._add_trading_wait(time_str, full_wait)
+        return {
+            'success': True,
+            'order': summary,
+            'as_of_time': time_str,
+            'actual': actual,
+            'current_queue': current_position,
+            'prediction': {
+                'available': first_wait is not None,
+                'lookahead_safe': True,
+                'confidence': confidence,
+                'price_active': price_active,
+                'has_filled_as_of': has_filled_as_of,
+                'filled_volume_as_of': filled_volume_as_of,
+                'first_fill_wait_ms': round(first_wait * 1000) if first_wait is not None else None,
+                'full_fill_wait_ms': round(full_wait * 1000) if full_wait is not None else None,
+                'first_fill_time': first_clock['time'],
+                'full_fill_time': full_clock['time'],
+                'first_fill_beyond_close': first_clock['beyond_close'],
+                'full_fill_beyond_close': full_clock['beyond_close'],
+                'queue_depletion_rate': queue_rate,
+                'same_price_trade_rate': trade_rate,
+                'warnings': warnings,
+                'basis': {
+                    'queue_window_ms': queue_sample['actual_window_ms'],
+                    'queue_observed_seconds': observed_seconds,
+                    'queue_depleted_volume': queue_sample.get('depleted_volume', 0),
+                    'trade_window_ms': trade_sample['actual_window_ms'],
+                    'trade_count': trade_count,
+                    'trade_volume': trade_sample.get('trade_volume', 0),
+                    'average_trade_size': trade_sample.get('average_trade_size', 0),
+                },
+            },
+        }
     def get_order_lifecycle(self, order_id: int) -> Dict[str, Any]:
         """
         重建订单生命周期：挂出 -> 逐笔成交/撤单 -> 终结。
