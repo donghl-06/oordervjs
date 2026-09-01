@@ -174,6 +174,34 @@
     const textColor = props.dark ? '#8b95a7' : '#667085';
     const splitColor = props.dark ? '#2c3342' : '#eef2f7';
 
+    // 仅展示累计成交/撤单时使用局部纵轴，避免几十万累计量仍从 0 起画。
+    const cumulativeOnly = selectedMetrics.value.every((key) =>
+      METRIC_DEFS.find((metricDef) => metricDef.key === key)?.instantKey,
+    );
+    const cumulativeAxis = {};
+    if (cumulativeOnly) {
+      const visibleValues = selectedMetrics.value.flatMap((key) => {
+        const metricDef = METRIC_DEFS.find((item) => item.key === key);
+        return list
+          .map((bucket) => Number(bucket[metricDef.plotKey]))
+          .filter((value) => Number.isFinite(value));
+      });
+      if (visibleValues.length) {
+        const interval = 5000;
+        const minValue = Math.min(...visibleValues);
+        const maxValue = Math.max(...visibleValues);
+        const range = maxValue - minValue;
+        const lowerPadding = Math.max(50000, range * 0.15);
+        const upperPadding = Math.max(interval, range * 0.1);
+        cumulativeAxis.min = Math.max(0, Math.floor((minValue - lowerPadding) / interval) * interval);
+        cumulativeAxis.max = Math.ceil((maxValue + upperPadding) / interval) * interval;
+        if (cumulativeAxis.max <= cumulativeAxis.min) {
+          cumulativeAxis.max = cumulativeAxis.min + interval;
+        }
+        cumulativeAxis.interval = interval;
+      }
+    }
+
     return {
       animation: false,
       grid: { left: 48, right: 14, top: 26, bottom: 22 },
@@ -221,6 +249,7 @@
       yAxis: {
         type: 'value',
         minInterval: 1,
+        ...cumulativeAxis,
         axisLabel: {
           fontSize: 10,
           color: textColor,
