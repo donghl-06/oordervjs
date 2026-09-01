@@ -50,7 +50,7 @@
       <div
         class="volume-grid"
         :class="{ fullscreen: isFullscreen }"
-        :style="{ gridTemplateColumns: `repeat(${isFullscreen ? 24 : cols}, 1fr)` }"
+        :style="{ gridTemplateColumns: `repeat(${isFullscreen ? 6 : cols}, 1fr)` }"
       >
         <Tooltip
           v-for="(order, index) in ordersData"
@@ -135,9 +135,9 @@
     return count;
   };
 
-  // 处理订单数据，固定网格布局：普通模式12列，全屏模式24列，动态行数显示所有数据
+  // 处理订单数据，固定网格布局：普通模式按 cols 列，全屏模式6列，动态行数显示所有数据
   const ordersData = computed(() => {
-    const cols = props.isFullscreen ? 24 : 12; // 固定列数
+    const cols = props.isFullscreen ? 6 : props.cols; // 与模板网格列数保持一致
 
     const row = props.data && typeof props.data === 'object' ? props.data : null;
     // 计算实际有数据的格子数量
@@ -480,21 +480,21 @@
     }
 
     .table-container.fullscreen {
-      min-height: 320px;
-      max-height: calc(100vh - 260px);
+      min-height: 360px;
+      max-height: calc(100vh - 220px);
     }
 
     .volume-grid {
       display: grid;
-      /* 列数由模板内联样式控制（cols prop / 全屏24列） */
+      /* 列数由模板内联样式控制（cols prop / 全屏6列） */
       gap: 0px; /* 移除间隙 */
       width: 100%;
       padding: 0px; /* 移除内边距 */
     }
 
     .volume-grid.fullscreen .volume-cell {
-      height: 48px;
-      font-size: 13px;
+      height: 64px;
+      font-size: 16px;
     }
 
     .volume-cell {
