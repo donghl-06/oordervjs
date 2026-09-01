@@ -297,6 +297,7 @@
           :current-time="selectTime"
           :ready="!isButtonDisabled"
           :dark="darkMode"
+          :is-etf="isETF"
           @seek="handleChartSeek"
         />
         <LockedOrderChart

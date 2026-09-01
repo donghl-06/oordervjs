@@ -64,6 +64,7 @@ class TradeBook:
         self._cstra_df: Optional[pd.DataFrame] = None
         self._order_price_map: Optional[Dict[int, float]] = None
         self._best_cancel_records: Optional[List[Dict]] = None
+        self._trade_price_records: Optional[List[Dict]] = None
 
         # 后台构建 create_time 映射，不阻塞初始化
         threading.Thread(target=self._build_order_time_map, daemon=True).start()
@@ -247,6 +248,25 @@ class TradeBook:
         self._best_cancel_records = sorted(records, key=lambda r: r['time_ms'])
         return [r for r in self._best_cancel_records if start_ms < r['time_ms'] <= end_ms]
 
+    def _get_trade_price_records(self, start_ms: int, end_ms: int) -> List[Dict]:
+        """返回时间范围内的逐笔成交价，结果按时间排序并缓存。"""
+        if self._trade_price_records is None:
+            self._load_tick_data()
+            records = []
+            if self._cstra_df is not None:
+                try:
+                    et = self._cstra_df["exectype"].astype(str).map(self._clean_exectype)
+                    trades = self._cstra_df[et == "1"]
+                    for _, row in trades.iterrows():
+                        time_part = str(row["datetime"]).split(" ")[-1]
+                        price = float(row["price"])
+                        if price > 0:
+                            records.append({"time_ms": _time_to_ms(time_part), "price": price})
+                except Exception as e:
+                    self.logger.n_log(f"成交价缓存构建失败: {self.get_key()}, 错误: {e}", self.log_level.ERROR)
+            self._trade_price_records = sorted(records, key=lambda r: r["time_ms"])
+        return [r for r in self._trade_price_records if start_ms < r["time_ms"] <= end_ms]
+
     def get_trade_flow_series(self, time_str: str, window_ms: int, points: int = 60) -> List[Dict]:
         """
         获取 [time-window, time] 窗口内买一/卖一的流量序列 + 一档盘口等待量。
@@ -298,6 +318,19 @@ class TradeBook:
         # 无法从窗口右缘的一档反推出历史时刻的“一档”，此前的反推会产生伪 0。
         level_snapshots = [self.visualizer.query_by_time(self.date, t) or {} for t in sample_times[1:]]
 
+        def _level_price(bucket_index, side):
+            levels = level_snapshots[bucket_index].get("levels") or {}
+            level = levels.get(f"{side}1") or {}
+            price = level.get("price")
+            return float(price) / 10000 if price is not None else None
+
+        trade_prices = [[] for _ in range(points)]
+        for rec in self._get_trade_price_records(start_ms, end_ms):
+            idx = int((rec["time_ms"] - start_ms) / step)
+            idx = min(max(idx, 0), points - 1)
+            if rec["price"] not in trade_prices[idx]:
+                trade_prices[idx].append(rec["price"])
+
         def _level_volume(bucket_index, side):
             levels = level_snapshots[bucket_index].get('levels') or {}
             level = levels.get(f'{side}1') or {}
@@ -324,6 +357,10 @@ class TradeBook:
                 # 桶右缘时刻的一档累计挂单量（盘口等待量）
                 'bid_volume': _level_volume(i, 'bid'),
                 'ask_volume': _level_volume(i, 'ask'),
+                # 价格字段供 Q-t 图悬停提示使用：挂单看当时一档价，成交看桶内成交价。
+                'bid_price': _level_price(i, 'bid'),
+                'ask_price': _level_price(i, 'ask'),
+                'trade_prices': trade_prices[i],
             })
         return series
 

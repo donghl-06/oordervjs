@@ -336,7 +336,7 @@ async def trade_flow_series(
 ):
     """
     获取 [time-window_ms, time] 窗口内买一/卖一的挂单/撤单/成交量分桶序列（C2 图表数据）。
-    挂单量字段为 bid_volume/ask_volume；撤单和成交曲线使用日内累计字段
+    挂单量字段为 bid_volume/ask_volume，并附带桶右缘的 bid_price/ask_price；撤单和成交曲线使用日内累计字段，并附带桶内 trade_prices 成交价列表
     *_cancel_cumulative/*_traded_cumulative，原 *_cancel/*_traded 保留为采样桶内瞬时新增量。
     """
     storage = get_shared_storage()

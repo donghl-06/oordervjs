@@ -48,6 +48,8 @@
     // TradeBook 数据是否已加载（未加载时不发请求）
     ready: { type: Boolean, default: false },
     dark: { type: Boolean, default: false },
+    // 价格精度：股票 2 位，基金/ETF 3 位
+    isEtf: { type: Boolean, default: false },
   });
 
   const emit = defineEmits(['seek']);
@@ -64,12 +66,12 @@
   // 6 个指标，颜色与页面约定一致（买红卖绿，同侧三指标用明度区分）
   // 撤单/成交以累计量绘线，并保留原桶字段作为浮窗中的瞬时新增量。
   const METRIC_DEFS = [
-    { key: 'bid_volume', label: '买一挂单量', color: '#f5222d', plotKey: 'bid_volume' },
-    { key: 'bid_cancel', label: '买一撤单', color: '#ff9c6e', plotKey: 'bid_cancel_cumulative', instantKey: 'bid_cancel' },
-    { key: 'bid_traded', label: '买一成交', color: '#a8071a', plotKey: 'bid_traded_cumulative', instantKey: 'bid_traded' },
-    { key: 'ask_volume', label: '卖一挂单量', color: '#52c41a', plotKey: 'ask_volume' },
-    { key: 'ask_cancel', label: '卖一撤单', color: '#95de64', plotKey: 'ask_cancel_cumulative', instantKey: 'ask_cancel' },
-    { key: 'ask_traded', label: '卖一成交', color: '#237804', plotKey: 'ask_traded_cumulative', instantKey: 'ask_traded' },
+    { key: "bid_volume", label: "买一挂单量", color: "#f5222d", plotKey: "bid_volume", priceKey: "bid_price", priceLabel: "买一价" },
+    { key: "bid_cancel", label: "买一撤单", color: "#ff9c6e", plotKey: "bid_cancel_cumulative", instantKey: "bid_cancel", priceKey: "bid_price", priceLabel: "买一价" },
+    { key: "bid_traded", label: "买一成交", color: "#a8071a", plotKey: "bid_traded_cumulative", instantKey: "bid_traded", priceKey: "trade_prices", priceLabel: "成交价", tradePrice: true },
+    { key: "ask_volume", label: "卖一挂单量", color: "#52c41a", plotKey: "ask_volume", priceKey: "ask_price", priceLabel: "卖一价" },
+    { key: "ask_cancel", label: "卖一撤单", color: "#95de64", plotKey: "ask_cancel_cumulative", instantKey: "ask_cancel", priceKey: "ask_price", priceLabel: "卖一价" },
+    { key: "ask_traded", label: "卖一成交", color: "#237804", plotKey: "ask_traded_cumulative", instantKey: "ask_traded", priceKey: "trade_prices", priceLabel: "成交价", tradePrice: true },
   ];
   const metricOptions = METRIC_DEFS.map((m) => ({ value: m.key, label: m.label }));
   const selectedMetrics = ref(['bid_volume', 'ask_volume']);
@@ -133,6 +135,23 @@
     if (windowMs.value >= 60000) return full.slice(0, 8); // HH:mm:ss
     if (windowMs.value >= 3000) return full.slice(3); // mm:ss.SSS
     return full.slice(6); // ss.SSS
+  };
+
+  const formatPrice = (value) => {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) return "--";
+    return numeric.toFixed(props.isEtf ? 3 : 2);
+  };
+
+  const getMetricPriceText = (def, bucket) => {
+    const rawPrice = bucket?.[def.priceKey];
+    if (def.tradePrice) {
+      const prices = Array.isArray(rawPrice)
+        ? [...new Set(rawPrice.map(Number).filter((price) => Number.isFinite(price)))]
+        : [];
+      return prices.length ? prices.map(formatPrice).join(" / ") : "--";
+    }
+    return formatPrice(rawPrice);
   };
 
   const buildOptions = () => {
@@ -232,12 +251,16 @@
             const def = METRIC_DEFS.find((m) => m.label === item.seriesName);
             const plotted = item.value?.[1];
             const value = plotted == null ? '--' : Number(plotted).toLocaleString('zh-CN');
+            const priceText = getMetricPriceText(def, bucket);
             if (def?.instantKey) {
               const instant = bucket?.[def.instantKey];
-              const instantText = instant == null ? '--' : Number(instant).toLocaleString('zh-CN');
-              lines.push(`${item.marker}${item.seriesName}：累计 ${value}；瞬时 ${instantText}`);
+              const instantText = instant == null ? "--" : Number(instant).toLocaleString("zh-CN");
+              lines.push(
+                item.marker + item.seriesName + "：累计 " + value + "；瞬时 " + instantText + "；" +
+                  def.priceLabel + "：" + priceText,
+              );
             } else {
-              lines.push(`${item.marker}${item.seriesName}：${value}`);
+              lines.push(item.marker + item.seriesName + "：" + value + "；" + def.priceLabel + "：" + priceText);
             }
           });
           return lines.join('<br/>');
