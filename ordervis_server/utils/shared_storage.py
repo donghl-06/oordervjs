@@ -18,6 +18,18 @@ from ordervis_server.package import backend_logger
 import lib.sh_revert_module as sh_revert_module
 import pandas as pd
 
+
+def is_orderbook_fund_code(symbol: str) -> bool:
+    """判断基金代码是否属于交易所场内、理论上具备盘口数据的市场。"""
+    normalized = str(symbol or "").strip().upper()
+    return normalized.endswith((".SH", ".SZ"))
+
+
+def is_otc_fund_code(symbol: str) -> bool:
+    """判断是否为场外基金代码（.OF），此类标的没有本页面需要的订单簿数据。"""
+    return str(symbol or "").strip().upper().endswith(".OF")
+
+
 class SharedTradeBookStorage:    
     def __init__(self, cleanup_interval: int = 3600, expiry_hours: float = 12.0):
         """ 初始化本地缓存存储 """
@@ -78,7 +90,10 @@ class SharedTradeBookStorage:
             """
             fund_data = get_data_sqlserver(fund_sql)
             if not fund_data.empty:
-                self._fund_codes = set(fund_data['code'].tolist())
+                self._fund_codes = {
+                    code for code in fund_data["code"].tolist()
+                    if is_orderbook_fund_code(code)
+                }
             
             self._codes_loaded = True
             self.logger.n_log(f"加载代码列表: 股票 {len(self._stock_codes)}个, 基金 {len(self._fund_codes)}个", self.log_level.INFO)
@@ -104,20 +119,36 @@ class SharedTradeBookStorage:
 
     def _get_data_db(self, symbol: str, date: str) -> None:
         # NOTE: 拉数前确保 adata 令牌有效（含 refresh 失败后的重新登录），避免仅依赖启动时 login 一次
+        if is_otc_fund_code(symbol):
+            raise ValueError(
+                f"{symbol} 是场外基金（.OF），没有可用于盘口回放的订单簿数据；请改选场内 ETF/LOF。"
+            )
+
         ensure_adata_session_or_raise()
         # 使用 adata_converter 进行格式转换，确保与 aqdatac 格式兼容
         from .adata_converter import get_cstra_ad, get_csord_ad, get_cstick_ad, save_to_csv
         
+        def fetch_required(fetcher, data_name):
+            try:
+                return fetcher(date, symbol)
+            except ValueError as exc:
+                if "数据为空" in str(exc):
+                    raise ValueError(
+                        f"{symbol} 在 {date} 没有可用的盘口数据（{data_name}为空）；"
+                        "请确认选择的是场内 ETF/LOF，且该日期有交易数据。"
+                    ) from exc
+                raise
+
         cstra_path = f"data/cstra_{symbol}_{date}.csv"
         if not os.path.exists(cstra_path):
             self.logger.n_log(f"获取并转换 cstra 数据: {symbol}_{date}", self.log_level.INFO)
-            cstra_df = get_cstra_ad(date, symbol)
+            cstra_df = fetch_required(get_cstra_ad, "逐笔成交")
             save_to_csv(cstra_df, cstra_path)
 
         csord_path = f"data/csord_{symbol}_{date}.csv"
         if not os.path.exists(csord_path):
             self.logger.n_log(f"获取并转换 csord 数据: {symbol}_{date}", self.log_level.INFO)
-            csord_df = get_csord_ad(date, symbol)
+            csord_df = fetch_required(get_csord_ad, "逐笔委托")
             save_to_csv(csord_df, csord_path)
             
             if symbol.endswith('.SH'):
@@ -127,7 +158,7 @@ class SharedTradeBookStorage:
         cstick_path = f"data/cstick_{symbol}_{date}.csv"
         if not os.path.exists(cstick_path):
             self.logger.n_log(f"获取并转换 cstick 数据: {symbol}_{date}", self.log_level.INFO)
-            cstick_df = get_cstick_ad(date, symbol)
+            cstick_df = fetch_required(get_cstick_ad, "盘口快照")
             save_to_csv(cstick_df, cstick_path)
 
 
@@ -198,6 +229,10 @@ class SharedTradeBookStorage:
         异步获取TradeBook，返回任务ID用于进度跟踪
         """
         key = self._generate_key(symbol, date)
+        if is_otc_fund_code(symbol):
+            raise ValueError(
+                f"{symbol} 是场外基金（.OF），没有可用于盘口回放的订单簿数据；请改选场内 ETF/LOF。"
+            )
         is_etf = self._is_etf(symbol)
         self.logger.n_log(f"[DEBUG] get_with_progress: {symbol}, is_ETF={is_etf}", self.log_level.DEBUG)
         

@@ -7,7 +7,7 @@ import os
 from fastapi import APIRouter, HTTPException, Depends
 from typing import Dict, Any, Optional
 import datetime as dt
-from ordervis_server.utils.shared_storage import get_shared_storage
+from ordervis_server.utils.shared_storage import get_shared_storage, is_orderbook_fund_code
 from ordervis_server.utils.tradebook import TradeBook
 from ordervis_server.utils.auth import get_current_user
 from ordervis_server.utils.utils import get_data_sqlserver, subtract_milliseconds
@@ -57,7 +57,7 @@ async def symList(
         stock_data = get_data_sqlserver(stock_sql)
         stock_codes = stock_data['code'].tolist() if not stock_data.empty else []
 
-        # 获取基金基本信息
+        # 获取基金基本信息。场外基金（.OF）没有订单簿数据，不纳入本页面的可回放标的。
         fund_sql = f"""
             SELECT F_INFO_WINDCODE as code
             FROM Filesync.dbo.chinamutualfunddescription
@@ -66,7 +66,12 @@ async def symList(
                 AND (F_INFO_DELISTDATE IS NULL OR F_INFO_DELISTDATE = '' OR F_INFO_DELISTDATE > '{current_date}')
         """
         fund_data = get_data_sqlserver(fund_sql)
-        fund_codes = fund_data['code'].tolist() if not fund_data.empty else []
+        fund_codes = []
+        if not fund_data.empty:
+            fund_codes = [
+                code for code in fund_data["code"].tolist()
+                if is_orderbook_fund_code(code)
+            ]
 
         # 合并股票和基金代码
         all_codes = stock_codes + fund_codes
@@ -78,7 +83,7 @@ async def symList(
         return {
             "code": 0,
             "data": items,
-            "message": f"获取标的列表成功 (股票: {len(stock_codes)}个, 基金: {len(fund_codes)}个, 合计: {len(all_codes)}个)"
+            "message": f"获取标的列表成功 (股票: {len(stock_codes)}个, 场内基金: {len(fund_codes)}个, 合计: {len(all_codes)}个)"
         }
     except Exception as e:
         return {

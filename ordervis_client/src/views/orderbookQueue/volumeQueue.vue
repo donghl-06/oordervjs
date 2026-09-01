@@ -1524,13 +1524,15 @@
           timestamp: new Date().toISOString()
         });
 
-        let errorMessage = '初始化TradeBook失败';
-        if (error.message?.includes('NetworkError') ||
-            error.message?.includes('fetch') ||
-            error.message?.includes('Connection refused')) {
-          errorMessage = '无法连接到服务器，请检查服务器状态';
-        } else if (error.message?.includes('timeout')) {
-          errorMessage = '请求超时，服务器可能正在处理大量数据';
+        let errorMessage = "初始化TradeBook失败";
+        if (error.message && (error.message.includes("场外基金") || error.message.includes("没有可用的盘口数据"))) {
+          errorMessage = error.message;
+        } else if (error.message?.includes("NetworkError") ||
+            error.message?.includes("fetch") ||
+            error.message?.includes("Connection refused")) {
+          errorMessage = "无法连接到服务器，请检查服务器状态";
+        } else if (error.message?.includes("timeout")) {
+          errorMessage = "请求超时，服务器可能正在处理大量数据";
         } else if (error.message) {
           errorMessage = `初始化失败: ${error.message}`;
         }
@@ -2529,20 +2531,22 @@
             let errorMessage = `初始化失败: ${error}`;
             let isServerCrash = false;
 
-            if (error.includes('std::bad_alloc')) {
-              errorMessage = '服务器内存不足: 当前数据集过大，服务器无法处理。建议：1）选择较小的数据集 2）联系管理员增加服务器内存';
+            if (error.includes("场外基金") || error.includes("没有可用的盘口数据")) {
+              errorMessage = error;
+            } else if (error.includes("std::bad_alloc")) {
+              errorMessage = "服务器内存不足: 当前数据集过大，服务器无法处理。建议：1）选择较小的数据集 2）联系管理员增加服务器内存";
               isServerCrash = true;
-            } else if (error.includes('任务执行失败')) {
-              errorMessage = '任务执行失败: 服务器在处理过程中出现错误';
+            } else if (error.includes("任务执行失败")) {
+              errorMessage = "任务执行失败: 服务器在处理过程中出现错误";
               isServerCrash = true;
-            } else if (error.includes('网络连接错误') || error.includes('服务器已断开') || error.includes('Connection refused')) {
-              errorMessage = '服务器连接中断: 服务器可能在处理大型数据时崩溃。请检查服务器状态或稍后重试';
+            } else if (error.includes("网络连接错误") || error.includes("服务器已断开") || error.includes("Connection refused")) {
+              errorMessage = "服务器连接中断: 服务器可能在处理大型数据时崩溃。请检查服务器状态或稍后重试";
               isServerCrash = true;
-            } else if (error.includes('连接失败：已达到最大重连次数') || error.includes('查询重试次数过多')) {
-              errorMessage = '连接失败: 多次尝试连接服务器失败，服务器可能不可用';
+            } else if (error.includes("连接失败：已达到最大重连次数") || error.includes("查询重试次数过多")) {
+              errorMessage = "连接失败: 多次尝试连接服务器失败，服务器可能不可用";
               isServerCrash = true;
-            } else if (error.includes('timeout') || error.includes('超时')) {
-              errorMessage = '连接超时: 服务器响应超时，可能正在处理其他任务或负载过高';
+            } else if (error.includes("timeout") || error.includes("超时")) {
+              errorMessage = "连接超时: 服务器响应超时，可能正在处理其他任务或负载过高";
             }
 
             // 如果是服务器崩溃，添加特殊提示

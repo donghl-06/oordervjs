@@ -132,7 +132,7 @@ uvicorn main:app --host 0.0.0.0 --port 18080 --workers 4
 - `GET /tradebook/DateList` - 获取交易日列表
   - 返回: 日期字符串列表 (YYYY-MM-DD格式)
 - `GET /tradebook/symList` - 获取标的列表
-  - 返回: 标的代码列表
+  - 返回: 可回放标的对象列表（code/type）；基金仅包含有订单簿数据的场内 ETF/LOF，场外 .OF 基金不返回
 
 ### 认证相关
 - `GET /auth/me` - 获取当前用户信息（需要有效token）

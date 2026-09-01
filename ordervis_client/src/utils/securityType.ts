@@ -2,7 +2,7 @@ export type SecurityType = 'stock' | 'fund';
 
 export const securityTypeOptions = [
   { value: 'stock' as SecurityType, label: '股票' },
-  { value: 'fund' as SecurityType, label: '基金' },
+  { value: 'fund' as SecurityType, label: '基金（仅场内 ETF/LOF）' },
 ];
 
 // 上海/深圳市场常见的场内基金、ETF、LOF代码段。
