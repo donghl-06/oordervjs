@@ -90,10 +90,11 @@
     { value: 60000, label: '窗口 1min' },
   ];
 
-  const metric = ref('ahead'); // ahead=身前量 / behind=身后量
+  const metric = ref('ahead'); // ahead=身前量 / behind=身后量 / position=队列位置比例
   const metricOptions = [
     { value: 'ahead', label: '身前量' },
     { value: 'behind', label: '身后量' },
+    { value: 'position', label: '队列位置' },
   ];
 
   // { [orderLocalId]: [{ t, ahead, behind }] } —— 后端按窗口均匀采样
@@ -149,11 +150,18 @@
           if (!t) continue;
           for (const id of props.lockedIds) {
             const queue = point.orders?.[String(id)];
+            const ahead = queue ? Number(queue.ahead_volume) || 0 : null;
+            const behind = queue ? Number(queue.behind_volume) || 0 : null;
+            const orderVolume = queue ? Number(queue.remaining_volume) || 0 : null;
+            const total = ahead != null && behind != null && orderVolume != null
+              ? ahead + behind + orderVolume
+              : 0;
             nextTracks[id].push({
               t,
-              ahead: queue ? Number(queue.ahead_volume) || 0 : null,
-              behind: queue ? Number(queue.behind_volume) || 0 : null,
-              orderVolume: queue ? Number(queue.remaining_volume) || 0 : null,
+              ahead,
+              behind,
+              orderVolume,
+              positionPct: total > 0 ? ((ahead + orderVolume / 2) / total) * 100 : null,
             });
           }
         }
@@ -294,13 +302,28 @@
     return full.slice(6);
   };
 
+  const getQueuePositionPct = (queue) => {
+    if (!queue) return null;
+    const ahead = Number(queue.ahead_volume) || 0;
+    const behind = Number(queue.behind_volume) || 0;
+    const orderVolume = Number(queue.remaining_volume) || 0;
+    const total = ahead + orderVolume + behind;
+    return total > 0 ? ((ahead + orderVolume / 2) / total) * 100 : null;
+  };
+
   // 事件时刻的纵轴取值：优先用生命周期自带的队列位置，
   // 否则使用采样序列中事件之前最近的非空值。
   const eventY = (id, eventMs, queue) => {
-    const key = metric.value === 'ahead' ? 'ahead_volume' : 'behind_volume';
-    if (queue && queue[key] != null) return queue[key];
+    if (metric.value === 'position') {
+      const positionPct = getQueuePositionPct(queue);
+      if (positionPct != null) return positionPct;
+    } else {
+      const key = metric.value === 'ahead' ? 'ahead_volume' : 'behind_volume';
+      if (queue && queue[key] != null) return queue[key];
+    }
+
     const list = tracks.value[id] || [];
-    const localKey = metric.value;
+    const localKey = metric.value === 'position' ? 'positionPct' : metric.value;
     for (let i = list.length - 1; i >= 0; i--) {
       if (list[i].t <= eventMs && list[i][localKey] != null) return list[i][localKey];
     }
@@ -316,7 +339,7 @@
       const color = SERIES_COLORS[i % SERIES_COLORS.length];
       const points = (tracks.value[id] || [])
         .filter((p) => p.t >= minMs && p.t <= maxMs)
-        .map((p) => [p.t, p[metric.value]]);
+        .map((p) => [p.t, metric.value === 'position' ? p.positionPct : p[metric.value]]);
 
       // 成交/撤单事件标记（B4），仅画窗口内的
       const lc = lifecycles.value[id];
@@ -368,7 +391,10 @@
       },
       tooltip: {
         trigger: 'axis',
-        valueFormatter: (v) => (v == null ? '--' : Number(v).toLocaleString('zh-CN')),
+        valueFormatter: (v) => {
+          if (v == null) return '--';
+          return metric.value === 'position' ? Number(v).toFixed(2) + '%' : Number(v).toLocaleString('zh-CN');
+        },
         axisPointer: {
           label: { formatter: (p) => formatMsToTimeStr(p.value) },
         },
@@ -383,13 +409,16 @@
       },
       yAxis: {
         type: 'value',
-        name: metric.value === 'ahead' ? '身前量' : '身后量',
+        name: metric.value === 'position' ? '队列位置 (%)' : metric.value === 'ahead' ? '身前量' : '身后量',
         nameTextStyle: { fontSize: 10, color: textColor },
-        minInterval: 1,
+        min: metric.value === 'position' ? 0 : undefined,
+        max: metric.value === 'position' ? 100 : undefined,
+        minInterval: metric.value === 'position' ? 10 : 1,
         axisLabel: {
           fontSize: 10,
           color: textColor,
-          formatter: (v) => (v >= 10000 ? `${v / 10000}万` : v),
+          formatter: (v) =>
+            metric.value === 'position' ? Number(v).toFixed(0) + '%' : (v >= 10000 ? String(v / 10000) + '万' : v),
         },
         splitLine: { lineStyle: { color: splitColor } },
       },
