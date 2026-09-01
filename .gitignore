@@ -42,6 +42,7 @@ venv/
 
 # Runtime output
 *.log
+ordervis_server/data/
 
 # Runtime state
 .runtime/
