@@ -268,10 +268,8 @@
     });
   });
 
-  const formatQueueVolume = (value) => Number(value).toLocaleString('zh-CN');
-
   const getQueueTooltip = (row) =>
-    `订单 ${row.id} · 队列位置（本单中心）${row.centerPct.toFixed(2)}% · 订单区间 ${row.startPct.toFixed(2)}%–${row.endPct.toFixed(2)}% · 身前量 ${formatQueueVolume(row.ahead)} · 本单剩余 ${formatQueueVolume(row.orderVolume)} · 身后量 ${formatQueueVolume(row.behind)}`;
+    '队列位置：' + row.centerPct.toFixed(2) + '%';
 
   const summaryChips = computed(() => {
     return props.lockedIds
