@@ -66,10 +66,17 @@ class ProgressManager:
         with self._lock:
             if task_id in self._tasks:
                 self._tasks[task_id]['status'] = 'completed' if success else 'failed'
-                self._tasks[task_id]['progress'] = 100 if success else 0
+                if success:
+                    self._tasks[task_id]['progress'] = 100
+                else:
+                    self._tasks[task_id]['progress'] = max(
+                        1, self._tasks[task_id].get('progress', 0)
+                    )
                 self._tasks[task_id]['completed_at'] = datetime.now().isoformat()
                 if error:
                     self._tasks[task_id]['error'] = error
+                    if not success:
+                        self._tasks[task_id]['message'] = f'初始化失败: {error}'
                 if success:
                     self._tasks[task_id]['message'] = '初始化完成'
     
@@ -103,14 +110,16 @@ class ProgressManager:
 # 全局进度管理器实例
 progress_manager = ProgressManager()
 
-def create_progress_callback(task_id: str):
-    """创建进度回调函数"""
+def create_progress_callback(task_id: str, start_percent: int = 0, end_percent: int = 100):
+    """创建进度回调函数，并把 C++ 进度映射到指定区间。"""
     def callback(progress: int, message: str = None):
-        """C++回调函数，接收进度百分比和消息"""
-        print(f"C++回调函数，接收进度百分比: {int(progress*100)}%")
-        if message:
-            progress_manager.update_progress(task_id, int(progress*100), message)
-        else:
-            progress_manager.update_progress(task_id, progress, f"处理进度: {progress}%")
+        """C++回调函数，兼容 0~1 和 0~100 两种进度值。"""
+        raw_progress = float(progress)
+        normalized = raw_progress / 100 if raw_progress > 1 else raw_progress
+        normalized = max(0.0, min(1.0, normalized))
+        mapped_progress = round(start_percent + normalized * (end_percent - start_percent))
+        progress_message = message or f"正在重建订单簿: {mapped_progress}%"
+        print(f"C++回调函数，接收进度百分比: {mapped_progress}%")
+        progress_manager.update_progress(task_id, mapped_progress, progress_message)
     
     return callback

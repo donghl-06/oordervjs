@@ -254,7 +254,6 @@ export class ProgressWebSocket {
   private async startListening() {
     console.log('🎧 开始监听WebSocket消息');
     let consecutiveTimeouts = 0;
-    const maxConsecutiveTimeouts = 5; // 最多连续超时5次后停止
 
     while (
       this.ws &&
@@ -282,7 +281,7 @@ export class ProgressWebSocket {
         if (error.message === 'timeout') {
           consecutiveTimeouts++;
           console.log(
-            `⏰ WebSocket接收超时(${consecutiveTimeouts}/${maxConsecutiveTimeouts})，开始查询进度`,
+            `⏰ WebSocket接收超时（连续 ${consecutiveTimeouts} 次），开始查询进度`,
           );
 
           const shouldExit = await this.queryProgressOnTimeout();
@@ -291,13 +290,9 @@ export class ProgressWebSocket {
             break;
           }
 
-          // 如果连续超时太多次，可能任务已经完成但没收到消息
-          if (consecutiveTimeouts >= maxConsecutiveTimeouts) {
-            console.log('⚠️ 连续超时次数过多，停止监听');
-            break;
-          }
-
-          console.log('🔄 继续监听循环');
+          // 后端当前通过 HTTP 查询返回进度，WebSocket 主要维持连接和心跳。
+          // 只要 HTTP 查询仍然成功，就持续监听直到任务完成或失败。
+          console.log('🔄 进度查询正常，继续监听循环');
         } else {
           console.error('❌ 监听过程中出错:', error);
           break;

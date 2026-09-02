@@ -4,11 +4,12 @@ TradeBook路由
 提供TradeBook相关的API接口
 """
 import os
+import pandas as pd
 from fastapi import APIRouter, HTTPException, Depends
 from typing import Dict, Any, Optional
 import datetime as dt
 from ordervis_server.utils.shared_storage import get_shared_storage, is_orderbook_fund_code
-from ordervis_server.utils.tradebook import TradeBook
+from ordervis_server.utils.tradebook import DEFAULT_DATA_PATH
 from ordervis_server.utils.auth import get_current_user
 from ordervis_server.utils.utils import get_data_sqlserver, subtract_milliseconds
 
@@ -682,35 +683,89 @@ async def find_order(
     # current_user: dict = Depends(get_current_user)
 ):
     """
-    根据订单时间、价格、数量和方向查找订单
-    
-    参数说明：
-    - sym: 交易对代码，如 '000001.SZ'
-    - date: 交易日期，如 '2024-01-15'
-    - order_time: 订单时间，如 '2024-01-15 14:59:59.730' 或 '14:59:59.730'
-    - order_price: 订单价格
-    - order_size: 订单数量
-    - order_side: 订单方向（1为买单，-1为卖单）
-    - tolerance_ms: 时间容差（毫秒），默认100ms
+    根据订单时间、价格、数量和方向查找订单。
+
+    查询只读取盘口初始化生成的本地 csord，避免隐式下载完整 TradeBook。
     """
     try:
-        # 使用共享 TradeBook 查询，保证订单查询与盘口回放读取同一份本地数据。
-        storage = get_shared_storage()
-        tradebook = storage.get(sym, date)
-        if not tradebook:
+        orders_path = os.path.join(DEFAULT_DATA_PATH, f"csord_{sym}_{date}.csv")
+        if not os.path.exists(orders_path):
             return {
                 "code": 1,
                 "data": None,
-                "message": f"TradeBook {sym}_{date} 不存在或初始化失败"
+                "message": f"{sym} {date} 尚未初始化，请先在盘口页面点击开始加载数据",
             }
 
-        result = tradebook.find_order(
-            order_time=order_time,
-            order_price=order_price,
-            order_size=order_size,
-            order_side=order_side,
-            tolerance_ms=tolerance_ms,
+        orders_df = pd.read_csv(orders_path)
+        required_columns = {"datetime", "price", "size", "side", "orderid"}
+        missing_columns = sorted(required_columns - set(orders_df.columns))
+        if missing_columns:
+            return {
+                "code": 1,
+                "data": None,
+                "message": f"本地订单数据缺少字段: {', '.join(missing_columns)}",
+            }
+
+        orders_df["datetime"] = pd.to_datetime(orders_df["datetime"], errors="coerce")
+        for column in ("price", "size", "side", "orderid"):
+            orders_df[column] = pd.to_numeric(orders_df[column], errors="coerce")
+        orders_df = orders_df.dropna(subset=list(required_columns))
+
+        time_value = str(order_time).strip()
+        target_time = pd.Timestamp(
+            f"{date} {time_value}" if " " not in time_value else time_value
         )
+        combined_match = (
+            ((orders_df["price"] - float(order_price)).abs() < 1e-6)
+            & ((orders_df["size"] - float(order_size)).abs() < 1e-6)
+            & (orders_df["side"] == int(order_side))
+        )
+
+        forward_matches = orders_df[
+            combined_match & (orders_df["datetime"] >= target_time)
+        ]
+        if not forward_matches.empty:
+            first_match = forward_matches.sort_values("datetime").iloc[0]
+            result = {
+                "success": True,
+                "orderid": int(first_match["orderid"]),
+                "datetime": str(first_match["datetime"]),
+                "price": float(first_match["price"]),
+                "size": float(first_match["size"]),
+                "side": int(first_match["side"]),
+                "message": f"成功找到匹配的订单: ID={int(first_match['orderid'])}",
+            }
+        else:
+            time_diff = target_time - orders_df["datetime"]
+            backward_matches = orders_df[
+                combined_match
+                & (orders_df["datetime"] < target_time)
+                & (time_diff < pd.Timedelta(milliseconds=tolerance_ms))
+            ]
+            if not backward_matches.empty:
+                first_match = backward_matches.sort_values(
+                    "datetime", ascending=False
+                ).iloc[0]
+                result = {
+                    "success": True,
+                    "orderid": int(first_match["orderid"]),
+                    "datetime": str(first_match["datetime"]),
+                    "price": float(first_match["price"]),
+                    "size": float(first_match["size"]),
+                    "side": int(first_match["side"]),
+                    "message": (
+                        "在容差时间内找到匹配的订单: "
+                        f"ID={int(first_match['orderid'])}"
+                    ),
+                }
+            else:
+                result = {
+                    "success": False,
+                    "orderid": None,
+                    "datetime": None,
+                    "message": "没有找到匹配的订单",
+                }
+
         return {
             "code": 0,
             "data": {
@@ -727,12 +782,12 @@ async def find_order(
             },
             "message": result.get("message", "订单查找完成"),
         }
-
-    except Exception as e:
+    except Exception as exc:
         import traceback
+
         return {
             "code": 1,
             "data": None,
-            "message": f"查找订单失败: {str(e)}",
-            "traceback": traceback.format_exc()
+            "message": f"查找订单失败: {exc}",
+            "traceback": traceback.format_exc(),
         }

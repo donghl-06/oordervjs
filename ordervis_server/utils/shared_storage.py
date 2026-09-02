@@ -12,8 +12,8 @@ from datetime import datetime, timedelta
 from typing import Dict, Optional, List
 
 from .tradebook import TradeBook, DEFAULT_DATA_PATH
-from .adata_session import ensure_adata_session_or_raise
 from .progress_manager import progress_manager, create_progress_callback
+from .adata_worker import fetch_dataset_to_csv
 from ordervis_server.package import backend_logger
 import lib.sh_revert_module as sh_revert_module
 import pandas as pd
@@ -39,6 +39,7 @@ class SharedTradeBookStorage:
         """ 初始化本地缓存存储 """
         # 本地缓存：存储TradeBook对象（每个进程独有）
         self.local_cache: Dict[str, TradeBook] = {}
+        self._initializing_tasks: Dict[str, str] = {}
         
         # 本地锁（用于线程安全）
         self.local_lock = threading.Lock()
@@ -121,21 +122,21 @@ class SharedTradeBookStorage:
             return 'stock'
         return 'unknown'
 
-    def _get_data_db(self, symbol: str, date: str) -> None:
-        # NOTE: 拉数前确保 adata 令牌有效（含 refresh 失败后的重新登录），避免仅依赖启动时 login 一次
+    def _get_data_db(self, symbol: str, date: str, progress_callback=None) -> None:
+        """确保三类本地数据存在；缺失数据通过隔离子进程从 adata 拉取。"""
         if is_otc_fund_code(symbol):
             raise ValueError(
                 f"{symbol} 是场外基金（.OF），没有可用于盘口回放的订单簿数据；请改选场内 ETF/LOF。"
             )
 
-        ensure_adata_session_or_raise()
-        # 使用 adata_converter 进行格式转换，确保与 aqdatac 格式兼容
-        from .adata_converter import get_cstra_ad, get_csord_ad, get_cstick_ad, save_to_csv
-        
-        def fetch_required(fetcher, data_name):
+        def report(progress: int, message: str):
+            if progress_callback:
+                progress_callback(progress, message)
+
+        def fetch_required(dataset: str, data_name: str, path: str):
             try:
-                return fetcher(date, symbol)
-            except ValueError as exc:
+                fetch_dataset_to_csv(dataset, date, symbol, path)
+            except Exception as exc:
                 if "数据为空" in str(exc):
                     raise ValueError(
                         f"{symbol} 在 {date} 没有可用的盘口数据（{data_name}为空）；"
@@ -145,32 +146,39 @@ class SharedTradeBookStorage:
 
         cstra_path = os.path.join(DATA_PATH, f"cstra_{symbol}_{date}.csv")
         if not os.path.exists(cstra_path):
+            report(5, "正在从 adata 获取逐笔成交数据...")
             self.logger.n_log(f"获取并转换 cstra 数据: {symbol}_{date}", self.log_level.INFO)
-            cstra_df = fetch_required(get_cstra_ad, "逐笔成交")
-            save_to_csv(cstra_df, cstra_path)
+            fetch_required("cstra", "逐笔成交", cstra_path)
+        report(18, "逐笔成交数据已就绪")
 
         csord_path = os.path.join(DATA_PATH, f"csord_{symbol}_{date}.csv")
         if not os.path.exists(csord_path):
+            report(20, "正在从 adata 获取逐笔委托数据...")
             self.logger.n_log(f"获取并转换 csord 数据: {symbol}_{date}", self.log_level.INFO)
-            csord_df = fetch_required(get_csord_ad, "逐笔委托")
-            save_to_csv(csord_df, csord_path)
-            
-            if symbol.endswith('.SH'):
-                engine = sh_revert_module.RecoverEngine()
-                csord_df = engine.recover(csord_path, cstra_path, csord_path)
+            fetch_required("csord", "逐笔委托", csord_path)
+
+            if symbol.endswith(".SH"):
+                recovered_path = f"{csord_path}.recovered.part"
+                try:
+                    engine = sh_revert_module.RecoverEngine()
+                    engine.recover(csord_path, cstra_path, recovered_path)
+                    os.replace(recovered_path, csord_path)
+                except Exception:
+                    if os.path.exists(recovered_path):
+                        os.remove(recovered_path)
+                    if os.path.exists(csord_path):
+                        os.remove(csord_path)
+                    raise
+        report(35, "逐笔委托数据已就绪")
 
         cstick_path = os.path.join(DATA_PATH, f"cstick_{symbol}_{date}.csv")
         if not os.path.exists(cstick_path):
+            report(38, "正在从 adata 获取盘口快照数据...")
             self.logger.n_log(f"获取并转换 cstick 数据: {symbol}_{date}", self.log_level.INFO)
-            cstick_df = fetch_required(get_cstick_ad, "盘口快照")
-            save_to_csv(cstick_df, cstick_path)
+            fetch_required("cstick", "盘口快照", cstick_path)
+        report(50, "数据文件准备完成，正在重建订单簿...")
 
 
-
-
-
-
-    
     def _put(self, tradebook: TradeBook) -> bool:
         """
         存储TradeBook到本地缓存
@@ -230,7 +238,7 @@ class SharedTradeBookStorage:
 
     def get_with_progress(self, symbol: str, date: str) -> str:
         """
-        异步获取TradeBook，返回任务ID用于进度跟踪
+        异步获取 TradeBook，返回任务 ID；同一标的日期只保留一个初始化任务。
         """
         key = self._generate_key(symbol, date)
         if is_otc_fund_code(symbol):
@@ -239,50 +247,60 @@ class SharedTradeBookStorage:
             )
         is_etf = self._is_etf(symbol)
         self.logger.n_log(f"[DEBUG] get_with_progress: {symbol}, is_ETF={is_etf}", self.log_level.DEBUG)
-        
-        # 检查是否已存在且未过期
+
         with self.local_lock:
             if key in self.local_cache:
                 tradebook = self.local_cache[key]
                 if not tradebook.is_expired(self.expiry_hours):
-                    # 已存在且未过期，直接返回
                     return None
-        
-        # 创建进度任务
-        task_id = progress_manager.create_task(symbol, date)
-        
-        # 在后台线程中执行初始化
+
+            existing_task_id = self._initializing_tasks.get(key)
+            if existing_task_id:
+                existing_task = progress_manager.get_task_info(existing_task_id)
+                if existing_task and existing_task.get("status") == "initializing":
+                    return existing_task_id
+                self._initializing_tasks.pop(key, None)
+
+            task_id = progress_manager.create_task(symbol, date)
+            self._initializing_tasks[key] = task_id
+
         def init_tradebook():
             try:
-                # 确保数据文件存在
-                self._get_data_db(symbol, date)
+                progress_manager.update_progress(task_id, 1, "正在准备 adata 数据...")
+                self._get_data_db(
+                    symbol,
+                    date,
+                    lambda progress, message: progress_manager.update_progress(
+                        task_id, progress, message
+                    ),
+                )
                 self.logger.n_log(f"[DEBUG] 数据文件准备完成: {key}", self.log_level.DEBUG)
-                
-                # 创建进度回调
-                callback = create_progress_callback(task_id)
-                
-                # 创建TradeBook实例
+
+                callback = create_progress_callback(task_id, 50, 99)
                 self.logger.n_log(f"[DEBUG] 开始创建TradeBook, is_ETF={is_etf}", self.log_level.DEBUG)
-                tradebook = TradeBook.create_with_progress(symbol, date, DATA_PATH, callback, is_ETF=is_etf)
-                
-                # 存储到缓存
+                tradebook = TradeBook.create_with_progress(
+                    symbol, date, DATA_PATH, callback, is_ETF=is_etf
+                )
+
                 with self.local_lock:
                     self.local_cache[key] = tradebook
-                
-                # 标记任务完成
+
                 progress_manager.complete_task(task_id, success=True)
-                
-            except Exception as e:
-                self.logger.n_log(f"[DEBUG] 初始化异常: {e}", self.log_level.ERROR)
-                self.logger.n_log(f"异步初始化TradeBook失败: {key}, 错误: {e}", self.log_level.ERROR)
-                progress_manager.complete_task(task_id, success=False, error=str(e))
-        
-        # 启动后台线程
+            except Exception as exc:
+                self.logger.n_log(f"[DEBUG] 初始化异常: {exc}", self.log_level.ERROR)
+                self.logger.n_log(
+                    f"异步初始化TradeBook失败: {key}, 错误: {exc}", self.log_level.ERROR
+                )
+                progress_manager.complete_task(task_id, success=False, error=str(exc))
+            finally:
+                with self.local_lock:
+                    if self._initializing_tasks.get(key) == task_id:
+                        self._initializing_tasks.pop(key, None)
+
         thread = threading.Thread(target=init_tradebook, daemon=True)
         thread.start()
-        
         return task_id
-    
+
     def exists(self, symbol: str, date: str) -> bool:
         """检查TradeBook是否在本地缓存中存在"""
         key = self._generate_key(symbol, date)
