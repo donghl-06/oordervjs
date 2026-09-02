@@ -9,9 +9,6 @@ NOTE: aauth.AAuthClient.is_alive 会在访问令牌过期时尝试 refresh；
 import os
 import threading
 
-import adata
-from aauth.client import AAuthClient
-
 from ordervis_server.package import backend_logger
 
 _adata_session_lock = threading.Lock()
@@ -26,6 +23,11 @@ def ensure_adata_session() -> bool:
     @return bool 会话可用返回 True；缺少凭证或登录失败返回 False
     """
     with _adata_session_lock:
+        # adata 导入时会联网更新元数据，必须延迟到隔离工作进程中执行，
+        # 否则 FastAPI 会在监听端口之前被阻塞。
+        import adata
+        from aauth.client import AAuthClient
+
         try:
             # NOTE: is_alive 会同步磁盘 token，并在 access 过期时尝试 refresh
             if AAuthClient().is_alive:

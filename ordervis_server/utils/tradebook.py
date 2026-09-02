@@ -7,7 +7,6 @@ from datetime import datetime, timedelta
 from typing import Any, Dict, Optional, Callable, Union, List
 from threading import Lock
 import os
-import adata
 
 from ordervis_server.package import backend_logger
 
@@ -432,13 +431,15 @@ class TradeBook:
         return datetime.now() - self.last_accessed_at
     
     def get_orders_data(self):
-        """获取订单数据；优先使用与盘口回放一致的本地 csord 文件。"""
+        """读取与盘口回放一致的本地 csord 文件。"""
         local_path = self._csord_path()
         try:
-            if os.path.exists(local_path):
-                orders_df = pd.read_csv(local_path)
-            else:
-                orders_df = adata.get_data("csord", self.date, self.date, [self.symbol])
+            if not os.path.exists(local_path):
+                self.logger.n_log(
+                    f"本地订单数据不存在: {local_path}", self.log_level.ERROR
+                )
+                return None
+            orders_df = pd.read_csv(local_path)
 
             if orders_df is None or len(orders_df) == 0:
                 return None

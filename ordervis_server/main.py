@@ -9,7 +9,6 @@ import os
 from ordervis_server.package import backend_logger
 from ordervis_server.routers import websocket
 import logging
-from ordervis_server.utils.adata_session import ensure_adata_session
 
 # 配置日志
 logger = backend_logger.Log("ordervis")
@@ -39,22 +38,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-# 应用启动事件：登录 adata
-@app.on_event("startup")
-async def startup_event():
-    """应用启动时执行的初始化操作"""
-    try:
-        if ensure_adata_session():
-            logger.n_log("adata 会话已就绪（启动时校验/登录）", log_level.INFO)
-        else:
-            logger.n_log(
-                "adata 启动时未能建立会话：请检查 aq_username / aq_password",
-                log_level.WARNING,
-            )
-    except Exception as e:
-        logger.n_log(f"adata 启动会话初始化异常: {e}", log_level.ERROR)
-        # 不抛出异常，允许应用继续启动
 
 # 注册路由
 app.include_router(auth.router, prefix="/basic-api", tags=["认证"])
