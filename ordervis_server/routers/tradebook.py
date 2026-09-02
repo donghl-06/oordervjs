@@ -694,94 +694,23 @@ async def find_order(
     - tolerance_ms: 时间容差（毫秒），默认100ms
     """
     try:
-        # 使用 adata_converter 获取转换后的数据，确保格式与 aqdatac 一致
-        import pandas as pd
-        import sys
-        import os
-        
-        # 添加 utils 目录到路径
-        sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
-        
-        from ordervis_server.utils.adata_converter import get_csord_ad
-        
-        # 使用转换器获取数据，返回的数据已经包含 datetime 列
-        try:
-            orders_df = get_csord_ad(date, sym)
-        except ValueError as ve:
-            # 处理数据为空或格式错误的情况
+        # 使用共享 TradeBook 查询，保证订单查询与盘口回放读取同一份本地数据。
+        storage = get_shared_storage()
+        tradebook = storage.get(sym, date)
+        if not tradebook:
             return {
                 "code": 1,
                 "data": None,
-                "message": f"无法获取订单数据: {str(ve)}"
+                "message": f"TradeBook {sym}_{date} 不存在或初始化失败"
             }
-        
-        if orders_df is None or len(orders_df) == 0:
-            return {
-                "code": 1,
-                "data": None,
-                "message": "无法获取订单数据或数据为空"
-            }
-        
-        # 转换时间格式
-        if isinstance(order_time, str):
-            # 如果只包含时间部分，添加日期
-            if ' ' not in order_time:
-                target_time = pd.Timestamp(f"{date} {order_time}")
-            else:
-                target_time = pd.Timestamp(order_time)
-        else:
-            target_time = order_time
 
-        # 矢量化计算：价格、数量和方向的匹配
-        price_match = (orders_df['price'] - order_price).abs() < 1e-6
-        size_match = (orders_df['size'] - order_size).abs() < 1e-6
-        side_match = orders_df['side'] == order_side
-        combined_match = price_match & size_match & side_match
-
-        # 第一步：查找时间大于等于给定时间的匹配订单
-        time_forward_match = orders_df['datetime'] >= target_time
-        forward_matches = orders_df[combined_match & time_forward_match]
-
-        if len(forward_matches) > 0:
-            # 选择时间最早的订单
-            min_time = forward_matches['datetime'].min()
-            first_match = forward_matches[forward_matches['datetime'] == min_time].iloc[0]
-            result = {
-                "success": True,
-                "orderid": int(first_match['orderid']),
-                "datetime": str(first_match['datetime']),
-                "price": float(first_match['price']),
-                "size": float(first_match['size']),
-                "side": int(first_match['side']),
-                "message": f"成功找到匹配的订单: ID={first_match['orderid']}"
-            }
-        else:
-            # 第二步：向前查找容差时间内最接近下单时间的订单
-            time_diff = target_time - orders_df['datetime']
-            time_backward_match = (orders_df['datetime'] < target_time) & (time_diff < pd.Timedelta(f"{tolerance_ms}ms"))
-            backward_matches = orders_df[combined_match & time_backward_match]
-
-            if len(backward_matches) > 0:
-                # 选择时间最接近的订单
-                max_time = backward_matches['datetime'].max()
-                first_match = backward_matches[backward_matches['datetime'] == max_time].iloc[0]
-                result = {
-                    "success": True,
-                    "orderid": int(first_match['orderid']),
-                    "datetime": str(first_match['datetime']),
-                    "price": float(first_match['price']),
-                    "size": float(first_match['size']),
-                    "side": int(first_match['side']),
-                    "message": f"在容差时间内找到匹配的订单: ID={first_match['orderid']}"
-                }
-            else:
-                result = {
-                    "success": False,
-                    "orderid": None,
-                    "datetime": None,
-                    "message": "没有找到匹配的订单"
-                }
-        
+        result = tradebook.find_order(
+            order_time=order_time,
+            order_price=order_price,
+            order_size=order_size,
+            order_side=order_side,
+            tolerance_ms=tolerance_ms,
+        )
         return {
             "code": 0,
             "data": {
@@ -792,13 +721,13 @@ async def find_order(
                     "order_price": order_price,
                     "order_size": order_size,
                     "order_side": order_side,
-                    "tolerance_ms": tolerance_ms
+                    "tolerance_ms": tolerance_ms,
                 },
-                "result": result
+                "result": result,
             },
-            "message": result.get("message", "订单查找完成")
+            "message": result.get("message", "订单查找完成"),
         }
-        
+
     except Exception as e:
         import traceback
         return {

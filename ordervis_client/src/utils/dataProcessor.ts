@@ -35,7 +35,7 @@ export function processNumericValue(value: any, fieldName: string): any {
   }
 
   // 对指定的字段进行精确匹配处理
-  const numericFields = ['total_volume', 'remaining_volume'];
+  const numericFields = ['total_volume', 'remaining_volume', 'ahead_volume', 'behind_volume'];
   const shouldProcess = numericFields.includes(fieldName.toLowerCase());
 
   // 特殊处理：getPastTimeTradeInfo API中的时间间隔统计字段

@@ -432,11 +432,30 @@ class TradeBook:
         return datetime.now() - self.last_accessed_at
     
     def get_orders_data(self):
-        """获取订单数据 (用于find_order功能)"""
+        """获取订单数据；优先使用与盘口回放一致的本地 csord 文件。"""
+        local_path = self._csord_path()
         try:
-            # 按照 example.py 的方式，使用 adata.get_data()
-            return adata.get_data("csord", self.date, self.date, [self.symbol])
+            if os.path.exists(local_path):
+                orders_df = pd.read_csv(local_path)
+            else:
+                orders_df = adata.get_data("csord", self.date, self.date, [self.symbol])
+
+            if orders_df is None or len(orders_df) == 0:
+                return None
+
+            if 'datetime' not in orders_df.columns:
+                if 'date' in orders_df.columns and 'time' in orders_df.columns:
+                    orders_df['datetime'] = orders_df['date'] + pd.to_timedelta(orders_df['time'])
+                else:
+                    return None
+
+            orders_df['datetime'] = pd.to_datetime(orders_df['datetime'], errors='coerce')
+            for column in ('price', 'size', 'side', 'orderid'):
+                if column in orders_df.columns:
+                    orders_df[column] = pd.to_numeric(orders_df[column], errors='coerce')
+            return orders_df.dropna(subset=['datetime', 'price', 'size', 'side', 'orderid'])
         except Exception as e:
+            self.logger.n_log(f"读取订单数据失败: {self.get_key()}, 错误: {e}", self.log_level.ERROR)
             return None
 
     def find_order(self, order_time: Union[str, datetime], order_price: float, 
@@ -467,11 +486,18 @@ class TradeBook:
                     "message": "无法获取订单数据或数据为空"
                 }
 
-            # 转换时间
+            # 转换时间；前端通常只传 HH:mm:ss.SSS，补上当前 TradeBook 日期。
             if isinstance(order_time, str):
-                target_time = pd.Timestamp(order_time)
+                time_value = order_time.strip()
+                target_time = pd.Timestamp(
+                    f"{self.date} {time_value}" if ' ' not in time_value else time_value
+                )
             else:
-                target_time = order_time
+                target_time = pd.Timestamp(order_time)
+
+            order_price = float(order_price)
+            order_size = float(order_size)
+            order_side = int(order_side)
 
             # 矢量化计算：价格、数量和方向的匹配
             price_match = (orders_df['price'] - order_price).abs() < 1e-6
@@ -1029,7 +1055,6 @@ class TradeBook:
         cancelled = sum(e['size'] for e in events if e['type'] == 'cancel')
         total = float(born_row['size'])
         create_ts = pd.Timestamp(events[0]['time'])
-        end_ts = pd.Timestamp(events[-1]['time'])
         trades = [e for e in events if e['type'] == 'trade']
         if remaining <= 0 and filled >= total - 1e-6:
             outcome = '全部成交'
@@ -1037,6 +1062,14 @@ class TradeBook:
             outcome = '部分成交后撤单' if filled > 0 else '全部撤单'
         else:
             outcome = '收盘残留'
+
+        # 收盘残留订单没有真实的终结事件，使用当日收盘时刻作为生命周期终点。
+        # 成交/撤单订单仍使用最后一条真实事件，避免改变原有统计口径。
+        end_ts = (
+            pd.Timestamp(f'{self.date} 15:00:00.000')
+            if outcome == '收盘残留'
+            else pd.Timestamp(events[-1]['time'])
+        )
         summary = {
             'order_id': order_id,
             'side': int(born_row['side']),

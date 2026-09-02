@@ -602,6 +602,20 @@
     // 处理来自 GlobalOrderSearch 的锁定请求（使用 sessionStorage，刷新后不保留）
     // 处理来自 GlobalOrderSearch 的自动锁定请求（顺序 await，替代 setTimeout 魔法链）
     const handleGlobalSearchLockRequest = async () => {
+      // GlobalOrderSearch 同时写入 Pinia 和 sessionStorage。Pinia 流程优先，
+      // 避免两个自动锁定流程并发修改 volumeData，导致快照时间互相覆盖。
+      if (orderLockStore.hasLockData) {
+        [
+          volumeQueue_isFromGlobalSearch,
+          volumeQueue_autoLock,
+          volumeQueue_lockTimestamp,
+          volumeQueue_lockOrderId,
+          volumeQueue_lockSym,
+          volumeQueue_lockDate,
+        ].forEach((key) => sessionStorage.removeItem(key));
+        return;
+      }
+
       // 只从 sessionStorage 读取来自 GlobalOrderSearch 的锁定请求
       const isFromGlobalSearch = sessionStorage.getItem('volumeQueue_isFromGlobalSearch');
       const autoLock = sessionStorage.getItem('volumeQueue_autoLock');
@@ -674,8 +688,13 @@
           await new Promise((resolve) => setTimeout(resolve, 100));
         }
 
-        // 步骤5：跳转到指定时间（await 保证 volumeData 已就绪后再锁定）
+        // 步骤5：跳转到创建时间对应的快照
         await clickMoveTime(lockTime);
+
+        // 创建事件时间可能早于订单进入盘口的第一条快照，沿变化点向前补齐。
+        if (!isOrderVisibleInCurrentSnapshot(lockOrderId)) {
+          await findFirstSnapshotContainingOrder(lockOrderId, lockTime);
+        }
 
         // 步骤6：锁定订单
         const lockSuccess = lockOrdersById(true);
@@ -708,12 +727,17 @@
       ];
       keysToRemove.forEach(key => localStorage.removeItem(key));
 
-      // 清除 Pinia Store 中的锁定数据（防止刷新后自动执行；
-      // 会话内的 Pinia 锁定请求由上方 watch(orderLockStore.hasLockData) 响应式处理）
-      orderLockStore.clearLockData();
-
-      // 检查是否有来自GlobalOrderSearch的单个订单锁定请求
-      await handleGlobalSearchLockRequest();
+      // 当前页面内的查询请求优先走 Pinia。只有在没有 Pinia 请求时，
+      // 才清理旧状态并使用 sessionStorage 兼容流程，避免两个流程并发。
+      const hasPiniaLockRequest = orderLockStore.hasLockData;
+      if (hasPiniaLockRequest) {
+        // 仅借用兼容入口清理同一请求留下的 sessionStorage 标记；该函数会立即返回。
+        await handleGlobalSearchLockRequest();
+      } else {
+        orderLockStore.clearLockData();
+        // 检查是否有来自 GlobalOrderSearch 的 sessionStorage 兼容请求
+        await handleGlobalSearchLockRequest();
+      }
 
       // 解决aria-hidden警告
       nextTick(() => {
@@ -1895,6 +1919,69 @@
       localStorage.setItem('volumeQueue_orderIndex', orderIndex.value.toString());
     }
 
+
+    // 判断订单是否已经出现在当前快照中。订单 ID 可能由接口分别以数字或字符串返回，统一按字符串比较。
+    const isOrderVisibleInCurrentSnapshot = (orderId) => {
+      const normalizedId = String(orderId ?? '').trim();
+      if (!normalizedId) return false;
+
+      for (const key of ['ask1', 'ask2', 'ask3', 'bid1', 'bid2', 'bid3']) {
+        const rowData = volumeData.value[key]?.data?.[0]?.[0];
+        if (!rowData) continue;
+
+        for (let i = 1; i <= 10000; i += 1) {
+          const volumeKey = 'v' + i;
+          if (rowData[volumeKey] === undefined || rowData[volumeKey] === '') break;
+          const currentId = rowData[volumeKey + '_order_local_id'];
+          if (currentId !== undefined && currentId !== null && String(currentId).trim() === normalizedId) {
+            return true;
+          }
+        }
+      }
+      return false;
+    };
+
+    // 创建时间对应的快照可能早于订单真正写入盘口的快照。
+    // 从创建时间开始沿变化点向前查找，直到当前快照包含订单。
+    const findFirstSnapshotContainingOrder = async (orderId, fromTime) => {
+      if (isOrderVisibleInCurrentSnapshot(orderId)) return true;
+
+      let cursorTime = fromTime;
+      const maxAttempts = 100;
+      for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+        let response;
+        try {
+          response = await getNextChange({
+            sym: selectSym.value,
+            date: selectDate.value,
+            time: cursorTime,
+            direction: 1,
+          });
+        } catch (error) {
+          debugLog('查找订单进入盘口的下一变化快照失败:', error);
+          return false;
+        }
+
+        const snapshot = response?.code === 0 ? response.data?.snapshot : null;
+        if (!snapshot) return false;
+
+        const nextTime = extractTimeFromTimestamp(snapshot.timestamp || response.data?.time || '');
+        if (!nextTime || parseTimeToMs(nextTime) <= parseTimeToMs(cursorTime)) return false;
+
+        updateVolumeDataFromSnapshot(snapshot, response.data);
+        updateMarketData();
+        cursorTime = nextTime;
+
+        if (isOrderVisibleInCurrentSnapshot(orderId)) {
+          debugLog('订单 ' + orderId + ' 已在 ' + nextTime + ' 的快照中找到');
+          return true;
+        }
+      }
+
+      debugLog('向前检查 ' + maxAttempts + ' 个变化快照后仍未找到订单 ' + orderId);
+      return false;
+    };
+
     const moveticks = (intevel) => {
       let newChangeIndex = changeIndex.value + intevel
       loading.value = true
@@ -2155,7 +2242,7 @@
                    debugLog(`      - 列 ${i}: order_local_id = ${orderLocalId}`);
                  }
                  
-                 if (orderLocalId === finalSearchId) {
+                 if (orderLocalId !== undefined && orderLocalId !== null && String(orderLocalId).trim() === finalSearchId) {
                    debugLog('✅ [lockOrdersById] 找到匹配的订单!');
                    debugLog(`   📍 位置信息:`);
                    debugLog(`      - 表格: ${key}`);
@@ -2365,7 +2452,11 @@
            // 查找包含该订单ID的单元格
            for (let i = 1; i <= 10000; i++) {
              const orderLocalIdKey = `v${i}_order_local_id`;
-             if (rowData[orderLocalIdKey] === orderId) {
+             if (
+               rowData[orderLocalIdKey] !== undefined &&
+               rowData[orderLocalIdKey] !== null &&
+               String(rowData[orderLocalIdKey]).trim() === String(orderId).trim()
+             ) {
                debugLog('Found order in', key, 'at column index:', i);
                
                // 找到对应的DOM元素
@@ -2488,7 +2579,11 @@
            // 遍历所有列（最多10000列）
            for (let i = 1; i <= 10000; i++) {
              const orderLocalIdKey = `v${i}_order_local_id`;
-             if (rowData[orderLocalIdKey] === finalOrderId) {
+             if (
+               rowData[orderLocalIdKey] !== undefined &&
+               rowData[orderLocalIdKey] !== null &&
+               String(rowData[orderLocalIdKey]).trim() === String(finalOrderId).trim()
+             ) {
                foundTable = key;
                foundColumn = i;
                debugLog(`   ✓ 在 volumeData 中找到订单: 表格=${key}, 列=${i}`);
@@ -2876,7 +2971,7 @@
       const params = {
         sym: selectSym.value,
         date: selectDate.value,
-        orderid: parseInt(orderId)
+        id: parseInt(orderId)
       };
       
       loading.value = true;
@@ -3038,7 +3133,15 @@
         
         // 调用前再次确认时间
         debugLog('   ✓ [步骤6] 调用 clickMoveTime，传入时间参数:', timeOnly);
-        clickMoveTime(timeOnly); // 直接传入时间参数，不依赖 selectTime.value
+        await clickMoveTime(timeOnly); // 直接传入时间参数，不依赖 selectTime.value
+
+        // 创建事件时间可能早于订单进入盘口的第一条快照，沿变化点向前补齐。
+        if (!isOrderVisibleInCurrentSnapshot(lockData.orderId)) {
+          lockProgress.value.detail = '创建时间快照尚未包含订单 ' + lockData.orderId + '，正在查找其进入盘口的时刻...';
+          updateLockProgressNotification();
+          await findFirstSnapshotContainingOrder(lockData.orderId, timeOnly);
+        }
+
         lockProgress.value.detail = '时间跳转完成';
         updateLockProgressNotification();
         
@@ -3177,7 +3280,11 @@
             // 遍历所有v1, v2, v3...列
              for (let i = 1; i <= 10000; i++) {
                const orderLocalIdKey = `v${i}_order_local_id`;
-               if (rowData[orderLocalIdKey] === orderId) {
+               if (
+                 rowData[orderLocalIdKey] !== undefined &&
+                 rowData[orderLocalIdKey] !== null &&
+                 String(rowData[orderLocalIdKey]).trim() === String(orderId).trim()
+               ) {
                  // 直接锁定匹配的order_local_id
                  if (!lockedOrderIds.value.includes(orderId)) {
                    lockedOrderIds.value.push(orderId);

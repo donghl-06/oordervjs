@@ -83,11 +83,11 @@
 
   const windowMs = ref(3000);
   const windowOptions = [
-    { value: 500, label: '窗口 500ms' },
-    { value: 1000, label: '窗口 1s' },
-    { value: 3000, label: '窗口 3s' },
-    { value: 10000, label: '窗口 10s' },
-    { value: 60000, label: '窗口 1min' },
+    { value: 500, label: '500ms' },
+    { value: 1000, label: '1s' },
+    { value: 3000, label: '3s' },
+    { value: 10000, label: '10s' },
+    { value: 60000, label: '1min' },
   ];
 
   const metric = ref('ahead'); // ahead=身前量 / behind=身后量 / position=队列位置比例
@@ -495,7 +495,7 @@
       },
       yAxis: {
         type: 'value',
-        name: metric.value === 'position' ? '队列位置 (%)' : metric.value === 'ahead' ? '身前量' : '身后量',
+        name: metric.value === 'position' ? '队列位置 (%)' : metric.value === 'ahead' ? '身前量（手）' : '身后量（手）',
         nameTextStyle: { fontSize: 10, color: textColor },
         min: metric.value === 'position' ? 0 : undefined,
         max: metric.value === 'position' ? 100 : undefined,
@@ -503,8 +503,13 @@
         axisLabel: {
           fontSize: 10,
           color: textColor,
-          formatter: (v) =>
-            metric.value === 'position' ? Number(v).toFixed(0) + '%' : (v >= 10000 ? String(v / 10000) + '万' : v),
+          formatter: (v) => {
+            if (metric.value === 'position') return Number(v).toFixed(0) + '%';
+            const numeric = Number(v);
+            if (!Number.isFinite(numeric)) return '';
+            if (Math.abs(numeric) >= 10000) return (numeric / 10000).toFixed(2) + '万';
+            return numeric.toLocaleString('zh-CN', { maximumFractionDigits: 2 });
+          },
         },
         splitLine: { lineStyle: { color: splitColor } },
       },

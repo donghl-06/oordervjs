@@ -56,20 +56,22 @@
 
   const windowMs = ref(3000);
   const windowOptions = [
-    { value: 500, label: '窗口 500ms' },
-    { value: 1000, label: '窗口 1s' },
-    { value: 3000, label: '窗口 3s' },
-    { value: 10000, label: '窗口 10s' },
-    { value: 60000, label: '窗口 1min' },
+    { value: 500, label: '500ms' },
+    { value: 1000, label: '1s' },
+    { value: 3000, label: '3s' },
+    { value: 10000, label: '10s' },
+    { value: 60000, label: '1min' },
   ];
 
-  // 6 个指标，颜色与页面约定一致（买红卖绿，同侧三指标用明度区分）
+  // 8 个指标，颜色与页面约定一致（买红卖绿，同侧指标用明度区分）
   // 撤单/成交以累计量绘线，并保留原桶字段作为浮窗中的瞬时新增量。
   const METRIC_DEFS = [
     { key: "bid_volume", label: "买一挂单量", color: "#f5222d", plotKey: "bid_volume", priceKey: "bid_price", priceLabel: "买一价" },
+    { key: "bid_create", label: "买一挂单（新增）", color: "#fa8c16", plotKey: "bid_create", instantOnly: true, priceKey: "bid_price", priceLabel: "买一价" },
     { key: "bid_cancel", label: "买一撤单", color: "#ff9c6e", plotKey: "bid_cancel_cumulative", instantKey: "bid_cancel", priceKey: "bid_price", priceLabel: "买一价" },
     { key: "bid_traded", label: "买一成交", color: "#a8071a", plotKey: "bid_traded_cumulative", instantKey: "bid_traded", priceKey: "trade_prices", priceLabel: "成交价", tradePrice: true },
     { key: "ask_volume", label: "卖一挂单量", color: "#52c41a", plotKey: "ask_volume", priceKey: "ask_price", priceLabel: "卖一价" },
+    { key: "ask_create", label: "卖一挂单（新增）", color: "#73d13d", plotKey: "ask_create", instantOnly: true, priceKey: "ask_price", priceLabel: "卖一价" },
     { key: "ask_cancel", label: "卖一撤单", color: "#95de64", plotKey: "ask_cancel_cumulative", instantKey: "ask_cancel", priceKey: "ask_price", priceLabel: "卖一价" },
     { key: "ask_traded", label: "卖一成交", color: "#237804", plotKey: "ask_traded_cumulative", instantKey: "ask_traded", priceKey: "trade_prices", priceLabel: "成交价", tradePrice: true },
   ];
@@ -143,6 +145,19 @@
     return numeric.toFixed(props.isEtf ? 3 : 2);
   };
 
+  const toHands = (value) => {
+    if (value === null || value === undefined || value === '') return value;
+    const numeric = Number(value);
+    return Number.isFinite(numeric) ? numeric / 100 : null;
+  };
+
+  const formatAxisVolume = (value) => {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) return '';
+    if (Math.abs(numeric) >= 10000) return (numeric / 10000).toFixed(2) + '万';
+    return numeric.toLocaleString('zh-CN', { maximumFractionDigits: 2 });
+  };
+
   const getMetricPriceText = (def, bucket) => {
     const rawPrice = bucket?.[def.priceKey];
     if (def.tradePrice) {
@@ -167,9 +182,12 @@
         areaStyle: { opacity: 0.12 },
         lineStyle: { width: 1.5 },
         itemStyle: { color: def.color },
-        // 桶右缘时间作为 x 值（当日毫秒数，value 轴避免 echarts time 轴时区偏移）
-        // 挂单量在锚点缺失时为 null → 折线自然断开而非误导性归零
-        data: list.map((b) => [parseTimeToMs(b.end), b[def.plotKey] ?? null]),
+        // 桶右缘时间作为 x 值（当日毫秒数，value 轴避免 echarts time 轴时区偏移）。
+        // 原始行情数量以 1/100 存储，这里统一转换为“手”；新增挂单没有数据时显示 0。
+        data: list.map((b) => [
+          parseTimeToMs(b.end),
+          def.instantOnly ? toHands(b[def.plotKey] ?? 0) : toHands(b[def.plotKey]),
+        ]),
       };
     });
 
@@ -194,15 +212,16 @@
     const splitColor = props.dark ? '#2c3342' : '#eef2f7';
 
     // 仅展示累计成交/撤单时按当前波动与累计量级生成局部纵轴。
-    const cumulativeOnly = selectedMetrics.value.every((key) =>
-      METRIC_DEFS.find((metricDef) => metricDef.key === key)?.instantKey,
-    );
+    const cumulativeOnly = selectedMetrics.value.every((key) => {
+      const metricDef = METRIC_DEFS.find((item) => item.key === key);
+      return metricDef?.instantKey && !metricDef.instantOnly;
+    });
     const cumulativeAxis = {};
     if (cumulativeOnly) {
       const visibleValues = selectedMetrics.value.flatMap((key) => {
         const metricDef = METRIC_DEFS.find((item) => item.key === key);
         return list
-          .map((bucket) => Number(bucket[metricDef.plotKey]))
+          .map((bucket) => toHands(bucket[metricDef.plotKey]))
           .filter((value) => Number.isFinite(value));
       });
       if (visibleValues.length) {
@@ -252,15 +271,17 @@
             const plotted = item.value?.[1];
             const value = plotted == null ? '--' : Number(plotted).toLocaleString('zh-CN');
             const priceText = getMetricPriceText(def, bucket);
-            if (def?.instantKey) {
-              const instant = bucket?.[def.instantKey];
+            if (def?.instantOnly) {
+              lines.push(item.marker + item.seriesName + "：" + value + " 手；" + def.priceLabel + "：" + priceText);
+            } else if (def?.instantKey) {
+              const instant = toHands(bucket?.[def.instantKey]);
               const instantText = instant == null ? "--" : Number(instant).toLocaleString("zh-CN");
               lines.push(
-                item.marker + item.seriesName + "：累计 " + value + "；瞬时 " + instantText + "；" +
+                item.marker + item.seriesName + "：累计 " + value + " 手；瞬时 " + instantText + " 手；" +
                   def.priceLabel + "：" + priceText,
               );
             } else {
-              lines.push(item.marker + item.seriesName + "：" + value + "；" + def.priceLabel + "：" + priceText);
+              lines.push(item.marker + item.seriesName + "：" + value + " 手；" + def.priceLabel + "：" + priceText);
             }
           });
           return lines.join('<br/>');
@@ -279,12 +300,14 @@
       },
       yAxis: {
         type: 'value',
+        name: '数量（手）',
+        nameTextStyle: { fontSize: 10, color: textColor },
         minInterval: 1,
         ...cumulativeAxis,
         axisLabel: {
           fontSize: 10,
           color: textColor,
-          formatter: (v) => (v >= 10000 ? `${v / 10000}万` : v),
+          formatter: formatAxisVolume,
         },
         splitLine: { lineStyle: { color: splitColor } },
       },
