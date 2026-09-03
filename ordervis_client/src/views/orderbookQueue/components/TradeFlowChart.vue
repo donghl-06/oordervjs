@@ -2,7 +2,14 @@
   <div class="chart-card">
     <div class="chart-card-header">
       <span class="chart-card-title">Q-t 窗口图</span>
-      <div v-if="!collapsed" class="chart-controls">
+      <Button class="collapse-btn" type="link" size="small" @click="collapsed = !collapsed">
+        {{ collapsed ? '展开' : '收起' }}
+      </Button>
+    </div>
+    <!-- 收起时 v-show 隐藏而非销毁，保住 ECharts 实例，展开后由 ResizeObserver 自动纠正尺寸 -->
+    <div v-show="!collapsed">
+      <!-- 第二行：时间窗口下拉框 + 2x4 指标矩阵，下拉框对齐矩阵中心线 -->
+      <div class="chart-controls">
         <Select
           v-model:value="windowMs"
           class="chart-select"
@@ -29,12 +36,6 @@
           </div>
         </div>
       </div>
-      <Button class="collapse-btn" type="link" size="small" @click="collapsed = !collapsed">
-        {{ collapsed ? '展开' : '收起' }}
-      </Button>
-    </div>
-    <!-- 收起时 v-show 隐藏而非销毁，保住 ECharts 实例，展开后由 ResizeObserver 自动纠正尺寸 -->
-    <div v-show="!collapsed">
       <div v-show="hasData" ref="chartEl" class="flow-chart" />
       <div v-if="!hasData" class="chart-placeholder">
         {{ placeholderText }}
@@ -402,11 +403,13 @@
     font-weight: 600;
   }
 
+  // 第二行控件条：时间窗口下拉框与 2x4 矩阵纵向居中对齐（对齐矩阵中心线）
   .chart-controls {
     display: flex;
     align-items: center;
     gap: 8px;
     flex-wrap: wrap;
+    margin-bottom: 4px;
   }
 
   .metric-grid {
