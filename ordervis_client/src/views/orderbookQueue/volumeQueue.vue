@@ -186,7 +186,6 @@
               :cols="queueCols"
               v-on:toggle-lock="toggleOrderLock"
             @inspect-execution="openExecutionEstimate"
-              :show-tooltip="true"
               @update-fullscreen="showHideTable"
             />
             <VolumeDataTable

@@ -9,43 +9,6 @@
         <span v-else>展开</span>
       </Button>
     </div>
-    <div v-if="lockedOrderStats.length" class="stats-panel">
-      <div class="stats-panel-header">
-        <span>当前价位锁定订单统计（{{ lockedOrderStats.length }} 个）</span>
-        <Tooltip
-          v-if="props.showTooltip && props.derection.includes('买一价')"
-          title="每个订单分别统计其前方订单、本订单和后方订单；占比以当前价位队列总量为分母，三项合计 100%"
-        >
-          <QuestionCircleOutlined class="stats-help" />
-        </Tooltip>
-      </div>
-      <div class="stats-grid">
-        <div v-for="stat in lockedOrderStats" :key="stat.lockedOrderId" class="stats-card">
-          <div class="stats-card-header">
-            <span class="stats-order-id">订单ID: {{ stat.lockedOrderId }}</span>
-            <span class="stats-position">队列第 {{ stat.queuePosition }} 位 · 队列位置 {{ stat.positionPercent }}%</span>
-          </div>
-          <div class="stats-metrics">
-            <div class="stats-metric">
-              <span>单前</span>
-              <strong>{{ formatVolume(stat.beforeVolume) }}手</strong>
-              <small>{{ stat.beforePercent }}%</small>
-            </div>
-            <div class="stats-metric current">
-              <span>本单</span>
-              <strong>{{ formatVolume(stat.currentVolume) }}手</strong>
-              <small>{{ stat.currentPercent }}%</small>
-            </div>
-            <div class="stats-metric">
-              <span>单后</span>
-              <strong>{{ formatVolume(stat.afterVolume) }}手</strong>
-              <small>{{ stat.afterPercent }}%</small>
-            </div>
-          </div>
-          <div class="stats-total">队列总量：{{ formatVolume(stat.totalVolume) }}手</div>
-        </div>
-      </div>
-    </div>
     <div class="table-container" :class="{ fullscreen: isFullscreen }">
       <div
         class="volume-grid"
@@ -77,9 +40,8 @@
 </template>
 
 <script lang="js" setup>
-  import { ref, computed, watch } from 'vue';
+  import { computed } from 'vue';
   import { Button, Tooltip } from 'ant-design-vue';
-  import { QuestionCircleOutlined } from '@ant-design/icons-vue';
 
   const props = defineProps({
     data: {
@@ -104,10 +66,6 @@
     lockedOrderIds: {
       type: Array,
       default: () => [],
-    },
-    showTooltip: {
-      type: Boolean,
-      default: false,
     },
     // 普通模式下的网格列数（全屏时固定 24 列）
     cols: {
@@ -227,86 +185,6 @@
     return props.derection.includes('买') || props.derection.includes('卖');
   });
 
-  const formatVolume = (value) => {
-    const numericValue = Number(value);
-    if (!Number.isFinite(numericValue)) return '0';
-    return numericValue.toLocaleString('zh-CN', { maximumFractionDigits: 2 });
-  };
-
-  const isLockedOrder = (orderId) => {
-    if (orderId === undefined || orderId === null || orderId === '') return false;
-    return lockedIdSet.value.has(String(orderId));
-  };
-
-  // 计算属性：为当前价位的每个锁定订单独立统计队列位置和前后数量
-  const lockedOrderStats = computed(() => {
-    if (!props.lockedOrderIds || props.lockedOrderIds.length === 0) {
-      return [];
-    }
-
-    const validOrders = [];
-    if (props.data && typeof props.data === 'object') {
-      const row = props.data;
-      // 订单键连续 v1..vN，遇空缺即停
-      for (let i = 1; row[`v${i}`] !== undefined; i++) {
-        const colKey = `v${i}`;
-        const orderLocalId = row[`${colKey}_order_local_id`];
-        const remainingVolume = row[colKey];
-
-        if (
-          orderLocalId !== undefined &&
-          orderLocalId !== null &&
-          String(orderLocalId).trim() !== '' &&
-          remainingVolume !== undefined &&
-          remainingVolume !== null &&
-          String(remainingVolume).trim() !== ''
-        ) {
-          validOrders.push({
-            index: i,
-            order_local_id: String(orderLocalId),
-            remaining_volume: parseFloat(remainingVolume) || 0,
-          });
-        }
-      }
-    }
-
-    if (validOrders.length === 0) {
-      return [];
-    }
-
-    const totalVolume = validOrders.reduce((sum, order) => sum + order.remaining_volume, 0);
-    let beforeVolume = 0;
-    validOrders.forEach((order) => {
-      order.beforeVolume = beforeVolume;
-      beforeVolume += order.remaining_volume;
-    });
-
-    let afterVolume = 0;
-    for (let i = validOrders.length - 1; i >= 0; i -= 1) {
-      validOrders[i].afterVolume = afterVolume;
-      afterVolume += validOrders[i].remaining_volume;
-    }
-
-    const percent = (value) => (totalVolume > 0 ? ((value / totalVolume) * 100).toFixed(2) : '0.00');
-
-    return validOrders
-      .filter((order) => isLockedOrder(order.order_local_id))
-      .map((order) => ({
-        lockedOrderId: order.order_local_id,
-        queuePosition: order.index,
-        beforeVolume: order.beforeVolume,
-        currentVolume: order.remaining_volume,
-        afterVolume: order.afterVolume,
-        beforePercent: percent(order.beforeVolume),
-        currentPercent: percent(order.remaining_volume),
-        afterPercent: percent(order.afterVolume),
-        positionPercent: totalVolume > 0
-          ? (((order.beforeVolume + order.remaining_volume / 2) / totalVolume) * 100).toFixed(2)
-          : '0.00',
-        totalVolume,
-      }));
-  });
-
   const toggleFullscreen = () => {
     if (props.tableKey) {
       emit('update-fullscreen', props.tableKey);
@@ -368,115 +246,6 @@
       display: inline-block; /* 确保按钮显示 */
     }
 
-    .stats-panel {
-      margin: 4px 0 8px;
-      padding: 6px 8px;
-      border: 1px solid #d9e2ec;
-      border-radius: 5px;
-      background: #f7faff;
-    }
-
-    .stats-panel-header {
-      display: flex;
-      align-items: center;
-      margin-bottom: 5px;
-      color: #425466;
-      font-size: 11px;
-      font-weight: 600;
-    }
-
-    .stats-help {
-      margin-left: 5px;
-      color: #1890ff;
-      cursor: pointer;
-    }
-
-    .stats-grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
-      gap: 6px;
-      max-height: 126px;
-      overflow-y: auto;
-      padding-right: 2px;
-    }
-
-    .stats-card {
-      min-width: 0;
-      padding: 6px 8px;
-      border: 1px solid #e1e6ed;
-      border-radius: 4px;
-      background: #fff;
-    }
-
-    .stats-card-header,
-    .stats-total {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      color: #667085;
-      font-size: 11px;
-    }
-
-    .stats-order-id {
-      overflow: hidden;
-      color: #262626;
-      font-weight: 600;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
-
-    .stats-position {
-      flex-shrink: 0;
-      margin-left: 8px;
-    }
-
-    .stats-metrics {
-      display: grid;
-      grid-template-columns: repeat(3, 1fr);
-      gap: 4px;
-      margin: 6px 0;
-    }
-
-    .stats-metric {
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      padding: 3px 2px;
-      border-radius: 3px;
-      background: #f5f7fa;
-      color: #667085;
-      font-size: 10px;
-
-      strong {
-        margin-top: 1px;
-        color: #1890ff;
-        font-size: 11px;
-      }
-
-      small {
-        color: #98a2b3;
-        font-size: 10px;
-      }
-    }
-
-    .stats-metric.current {
-      background: #e6f7ff;
-
-      strong {
-        color: #096dd9;
-      }
-    }
-
-    .stats-total {
-      justify-content: flex-end;
-      color: #52c41a;
-    }
-
-    @media (max-width: 700px) {
-      .stats-grid {
-        grid-template-columns: minmax(0, 1fr);
-      }
-    }
     .table-container {
       margin-top: 0px;
       margin-bottom: 10px;

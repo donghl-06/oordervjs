@@ -14,11 +14,71 @@
       </div>
     </div>
 
-    <!-- 摘要行：每个锁定订单一条（数据来自 B4 order_lifecycle） -->
-    <div v-if="summaryChips.length" class="lock-summary">
-      <span v-for="chip in summaryChips" :key="chip.id" class="summary-chip" :style="{ borderColor: chip.color, color: chip.color }">
-        <b>{{ chip.id }}</b> · 挂出 {{ chip.createTime }} · 存活 {{ chip.lifespan }} · 成交 {{ chip.filledPct }} · {{ chip.outcome }}
-      </span>
+    <!-- 锁定订单队列统计（原左侧 VolumeTable 统计卡片，移入本模块，覆盖全部六个档位） -->
+    <div v-if="statsCards.length" class="stats-panel">
+      <div class="stats-panel-header">
+        <span>锁定订单队列统计（{{ statsCards.length }} 个）</span>
+        <Tooltip title="每个订单分别统计其前方订单、本订单和后方订单；占比以所在档位队列总量为分母，三项合计 100%">
+          <QuestionCircleOutlined class="stats-help" />
+        </Tooltip>
+      </div>
+      <div class="stats-grid">
+        <div v-for="stat in statsCards" :key="stat.id" class="stats-card">
+          <div class="stats-card-header">
+            <span class="stats-order-id" :style="{ color: stat.color }">订单ID: {{ stat.id }}</span>
+            <span class="stats-position">{{ stat.levelLabel }} · 队列第 {{ stat.queuePosition }} 位 · 队列位置 {{ stat.positionPercent }}%</span>
+          </div>
+          <div class="stats-metrics">
+            <div class="stats-metric">
+              <span>单前</span>
+              <strong>{{ formatVolume(stat.beforeVolume) }}手</strong>
+              <small>{{ stat.beforePercent }}%</small>
+            </div>
+            <div class="stats-metric current">
+              <span>本单</span>
+              <strong>{{ formatVolume(stat.currentVolume) }}手</strong>
+              <small>{{ stat.currentPercent }}%</small>
+            </div>
+            <div class="stats-metric">
+              <span>单后</span>
+              <strong>{{ formatVolume(stat.afterVolume) }}手</strong>
+              <small>{{ stat.afterPercent }}%</small>
+            </div>
+          </div>
+          <div class="stats-total">队列总量：{{ formatVolume(stat.totalVolume) }}手</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 摘要表格：每个锁定订单一行（数据来自 B4 order_lifecycle） -->
+    <div v-if="summaryRows.length" class="lock-summary">
+      <table class="summary-table">
+        <thead>
+          <tr>
+            <th>订单ID</th>
+            <th>挂出时间</th>
+            <th>存活时间</th>
+            <th>成交/撤单时间</th>
+            <th>成交占比</th>
+            <th>最终结果</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="row in summaryRows" :key="row.id">
+            <td>
+              <span class="summary-id" :style="{ borderColor: row.color, color: row.color }">{{ row.id }}</span>
+            </td>
+            <td>{{ row.createTime }}</td>
+            <td>{{ row.lifespan }}</td>
+            <td>
+              <template v-if="row.endTime">{{ row.endTime }}<span class="end-tag" :class="row.endKind">{{ row.endKind === 'trade' ? '成交' : '撤单' }}</span></template>
+              <template v-else>--</template>
+            </td>
+            <td>{{ row.filledPct }}</td>
+            <td>{{ row.outcome }}</td>
+          </tr>
+        </tbody>
+      </table>
     </div>
 
     <div v-show="hasPoints" ref="chartEl" class="lock-chart" />
@@ -53,10 +113,22 @@
 <script lang="js" setup>
   import { ref, computed, watch, nextTick } from 'vue';
   import { Select, Radio, Tooltip } from 'ant-design-vue';
+  import { QuestionCircleOutlined } from '@ant-design/icons-vue';
   import { useDebounceFn } from '@vueuse/core';
   import { useECharts } from '/@/hooks/web/useECharts';
   import { getOrderLifecycle, getOrderQueueSeries } from '/@/api/orderbook/orderbook';
   import { parseTimeToMs, formatMsToTimeStr } from '../composables/useSnapshotNavigation';
+
+  const LEVEL_LABELS = {
+    bid1: '买一', bid2: '买二', bid3: '买三',
+    ask1: '卖一', ask2: '卖二', ask3: '卖三',
+  };
+
+  const formatVolume = (value) => {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) return '0';
+    return numeric.toLocaleString('zh-CN', { maximumFractionDigits: 2 });
+  };
 
   /**
    * C5 锁定订单身前/身后量图
@@ -161,6 +233,9 @@
               ahead,
               behind,
               orderVolume,
+              level: queue?.level || null,
+              queuePosition: queue?.position ?? null,
+              totalVolume: total,
               positionPct: total > 0 ? ((ahead + orderVolume / 2) / total) * 100 : null,
             });
           }
@@ -254,7 +329,7 @@
 
       const total = orders.reduce((sum, order) => sum + order.volume, 0);
       let ahead = 0;
-      orders.forEach((order) => {
+      orders.forEach((order, orderIndex) => {
         let behind = total - ahead - order.volume;
         if (behind < 0) behind = 0;
         if (lockedSet.has(order.id)) {
@@ -262,6 +337,9 @@
             ahead,
             behind,
             orderVolume: order.volume,
+            level: levelKey,
+            queuePosition: orderIndex + 1,
+            totalVolume: total,
             positionPct: total > 0 ? ((ahead + order.volume / 2) / total) * 100 : null,
           };
         }
@@ -289,6 +367,9 @@
         ahead: current ? current.ahead : null,
         behind: current ? current.behind : null,
         orderVolume: current ? current.orderVolume : null,
+        level: current ? current.level : null,
+        queuePosition: current ? current.queuePosition : null,
+        totalVolume: current ? current.totalVolume : null,
         positionPct: current ? current.positionPct : null,
       });
       list.sort((a, b) => a.t - b.t);
@@ -359,7 +440,54 @@
   const getQueueTooltip = (row) =>
     '队列位置：' + row.centerPct.toFixed(2) + '%';
 
-  const summaryChips = computed(() => {
+  // 锁定订单队列统计卡片：优先取当前快照（与左侧表格同一份数据），
+  // 快照未就绪时回退到采样序列中当前时刻之前的最近一点。
+  const statsCards = computed(() => {
+    const now = currentMs.value;
+    const percent = (value, total) => (total > 0 ? ((value / total) * 100).toFixed(2) : '0.00');
+
+    return props.lockedIds
+      .map((id, i) => {
+        const key = String(id);
+        let point = currentSnapshotReady.value ? currentSnapshotPositions.value[key] : null;
+        if (!point) {
+          const list = tracks.value[key] || [];
+          for (let index = list.length - 1; index >= 0; index--) {
+            if (list[index].t <= now && list[index].ahead != null) {
+              point = list[index];
+              break;
+            }
+          }
+        }
+        if (!point || point.ahead == null || point.orderVolume == null) return null;
+
+        const total = point.totalVolume != null
+          ? point.totalVolume
+          : point.ahead + point.orderVolume + (point.behind || 0);
+        if (total <= 0) return null;
+
+        return {
+          id: key,
+          color: SERIES_COLORS[i % SERIES_COLORS.length],
+          levelLabel: LEVEL_LABELS[point.level] || '--',
+          queuePosition: point.queuePosition ?? '--',
+          beforeVolume: point.ahead,
+          currentVolume: point.orderVolume,
+          afterVolume: point.behind || 0,
+          beforePercent: percent(point.ahead, total),
+          currentPercent: percent(point.orderVolume, total),
+          afterPercent: percent(point.behind || 0, total),
+          positionPercent: total > 0
+            ? (((point.ahead + point.orderVolume / 2) / total) * 100).toFixed(2)
+            : '0.00',
+          totalVolume: total,
+        };
+      })
+      .filter(Boolean);
+  });
+
+  // 摘要表格行：挂出/存活/成交或撤单时间/成交占比/最终结果（B4 order_lifecycle）
+  const summaryRows = computed(() => {
     return props.lockedIds
       .map((id, i) => {
         const lc = lifecycles.value[id];
@@ -369,12 +497,35 @@
           s.lifespan_ms >= 1000 ? `${(s.lifespan_ms / 1000).toFixed(1)}s` : `${s.lifespan_ms}ms`;
         const filledPct = s.size ? `${Math.round((s.filled_size / s.size) * 100)}%` : '--';
         const createTime = (s.create_time || '').split(' ')[1] || s.create_time || '--';
+
+        // 成交/撤单时间按最终结果二选一：全部成交→最后成交时刻；
+        // 撤单类结局→最后撤单时刻；收盘残留→无终结事件
+        const events = lc.events || [];
+        const outcome = s.outcome || '--';
+        let endTime = null;
+        let endKind = null;
+        if (outcome.includes('撤单')) {
+          const cancels = events.filter((ev) => ev.type === 'cancel');
+          if (cancels.length) {
+            endTime = (cancels[cancels.length - 1].time || '').split(' ')[1] || cancels[cancels.length - 1].time;
+            endKind = 'cancel';
+          }
+        } else if (outcome.includes('成交') && outcome !== '收盘残留') {
+          const trades = events.filter((ev) => ev.type === 'trade');
+          if (trades.length) {
+            endTime = (trades[trades.length - 1].time || '').split(' ')[1] || trades[trades.length - 1].time;
+            endKind = 'trade';
+          }
+        }
+
         return {
           id: String(id),
           createTime,
           lifespan,
+          endTime,
+          endKind,
           filledPct,
-          outcome: s.outcome || '--',
+          outcome,
           color: SERIES_COLORS[i % SERIES_COLORS.length],
         };
       })
@@ -565,18 +716,160 @@
     width: 96px;
   }
 
-  .lock-summary {
+  .stats-panel {
+    margin: 4px 0 8px;
+    padding: 6px 8px;
+    border: 1px solid #d9e2ec;
+    border-radius: 5px;
+    background: #f7faff;
+  }
+
+  .stats-panel-header {
     display: flex;
-    flex-wrap: wrap;
-    gap: 4px 10px;
-    margin-bottom: 4px;
+    align-items: center;
+    margin-bottom: 5px;
+    color: #425466;
+    font-size: 11px;
+    font-weight: 600;
+  }
+
+  .stats-help {
+    margin-left: 5px;
+    color: #1890ff;
+    cursor: pointer;
+  }
+
+  .stats-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+    gap: 6px;
+    max-height: 126px;
+    overflow-y: auto;
+    padding-right: 2px;
+  }
+
+  .stats-card {
+    min-width: 0;
+    padding: 6px 8px;
+    border: 1px solid #e1e6ed;
+    border-radius: 4px;
+    background: #fff;
+  }
+
+  .stats-card-header,
+  .stats-total {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    color: #667085;
     font-size: 11px;
   }
 
-  .summary-chip {
-    border-left: 3px solid;
-    padding-left: 5px;
+  .stats-order-id {
+    overflow: hidden;
+    font-weight: 600;
+    text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  .stats-position {
+    flex-shrink: 0;
+    margin-left: 8px;
+  }
+
+  .stats-metrics {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 4px;
+    margin: 6px 0;
+  }
+
+  .stats-metric {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 3px 2px;
+    border-radius: 3px;
+    background: #f5f7fa;
+    color: #667085;
+    font-size: 10px;
+
+    strong {
+      margin-top: 1px;
+      color: #1890ff;
+      font-size: 11px;
+    }
+
+    small {
+      color: #98a2b3;
+      font-size: 10px;
+    }
+  }
+
+  .stats-metric.current {
+    background: #e6f7ff;
+
+    strong {
+      color: #096dd9;
+    }
+  }
+
+  .stats-total {
+    justify-content: flex-end;
+    color: #52c41a;
+  }
+
+  .lock-summary {
+    margin-bottom: 6px;
+    overflow-x: auto;
+  }
+
+  .summary-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+
+    th,
+    td {
+      padding: 4px 8px;
+      border-bottom: 1px solid #eef2f7;
+      text-align: center;
+      white-space: nowrap;
+    }
+
+    th {
+      color: #667085;
+      font-weight: 600;
+      background: #f7f9fc;
+    }
+
+    td {
+      color: #1d2939;
+    }
+  }
+
+  .summary-id {
+    padding-left: 5px;
+    border-left: 3px solid;
+    font-weight: 600;
+  }
+
+  .end-tag {
+    margin-left: 4px;
+    padding: 0 4px;
+    border-radius: 3px;
+    font-size: 10px;
+
+    &.trade {
+      color: #c41d7f;
+      background: #fff0f6;
+    }
+
+    &.cancel {
+      color: #595959;
+      background: #f5f5f5;
+    }
   }
 
   .lock-chart {
