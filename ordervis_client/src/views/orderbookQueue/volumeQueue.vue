@@ -106,21 +106,11 @@
         <div class="ov-bar-group time-step-group">
           <span class="group-label">时间</span>
           <span class="step-label">小步</span>
-          <Select
-            v-model:value="smallStepMs"
-            class="ov-select w-step"
-            :options="smallStepOptions"
-            :allow-clear="false"
-          />
+          <TimeStepSelect v-model:value="smallStepMs" :presets="smallStepOptions" />
           <Button :disabled="isButtonDisabled" @click="moveTimes(-smallStepMs)">◀</Button>
           <Button :disabled="isButtonDisabled" @click="moveTimes(smallStepMs)">▶</Button>
           <span class="step-label">大步</span>
-          <Select
-            v-model:value="bigStepMs"
-            class="ov-select w-step"
-            :options="bigStepOptions"
-            :allow-clear="false"
-          />
+          <TimeStepSelect v-model:value="bigStepMs" :presets="bigStepOptions" />
           <Button :disabled="isButtonDisabled" @click="moveTimes(-bigStepMs)">◀◀</Button>
           <Button :disabled="isButtonDisabled" @click="moveTimes(bigStepMs)">▶▶</Button>
         </div>
@@ -506,6 +496,7 @@
     import LockOrderSelector from './components/LockOrderSelector.vue'
     import TradeFlowChart from './components/TradeFlowChart.vue'
     import LockedOrderChart from './components/LockedOrderChart.vue'
+    import TimeStepSelect from './components/TimeStepSelect.vue'
     import { useSnapshotNavigation } from './composables/useSnapshotNavigation';
     import { useMessage } from '/@/hooks/web/useMessage';
     import { createProgressListener } from '/@/utils/websocket';
@@ -1147,21 +1138,11 @@
 
     // ==================== 第 4 步：布局与视觉重构新增状态 ====================
 
-    // A1 步进颗粒度选择器
+    // A1 步进颗粒度选择器（预设为毫秒数，支持输入「数字+ms/s/min」自定义）
     const smallStepMs = ref(30);
-    const smallStepOptions = [
-      { value: 10, label: '10ms' },
-      { value: 30, label: '30ms' },
-      { value: 100, label: '100ms' },
-      { value: 500, label: '500ms' },
-    ];
+    const smallStepOptions = [5, 10, 30, 50, 100, 200, 500, 1000];
     const bigStepMs = ref(1000);
-    const bigStepOptions = [
-      { value: 1000, label: '1s' },
-      { value: 3000, label: '3s' },
-      { value: 10000, label: '10s' },
-      { value: 60000, label: '1min' },
-    ];
+    const bigStepOptions = [500, 1000, 3000, 5000, 10000, 30000, 60000, 300000];
     const orderStep = ref(1);
     const orderStepOptions = [
       { value: 1, label: '±1 订单' },
