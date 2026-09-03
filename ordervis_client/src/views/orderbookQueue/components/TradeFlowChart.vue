@@ -380,7 +380,7 @@
 
   .chart-controls {
     display: flex;
-    align-items: flex-start;
+    align-items: center;
     gap: 8px;
     flex-wrap: wrap;
   }
