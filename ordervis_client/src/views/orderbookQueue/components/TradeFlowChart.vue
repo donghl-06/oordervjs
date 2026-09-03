@@ -2,7 +2,7 @@
   <div class="chart-card">
     <div class="chart-card-header">
       <span class="chart-card-title">Q-t 窗口图</span>
-      <div class="chart-controls">
+      <div v-if="!collapsed" class="chart-controls">
         <Select
           v-model:value="windowMs"
           class="chart-select"
@@ -29,17 +29,23 @@
           </div>
         </div>
       </div>
+      <Button class="collapse-btn" type="link" size="small" @click="collapsed = !collapsed">
+        {{ collapsed ? '展开' : '收起' }}
+      </Button>
     </div>
-    <div v-show="hasData" ref="chartEl" class="flow-chart" />
-    <div v-if="!hasData" class="chart-placeholder">
-      {{ placeholderText }}
+    <!-- 收起时 v-show 隐藏而非销毁，保住 ECharts 实例，展开后由 ResizeObserver 自动纠正尺寸 -->
+    <div v-show="!collapsed">
+      <div v-show="hasData" ref="chartEl" class="flow-chart" />
+      <div v-if="!hasData" class="chart-placeholder">
+        {{ placeholderText }}
+      </div>
     </div>
   </div>
 </template>
 
 <script lang="js" setup>
   import { ref, computed, watch, nextTick } from 'vue';
-  import { Select, Checkbox } from 'ant-design-vue';
+  import { Select, Checkbox, Button } from 'ant-design-vue';
   import { useDebounceFn, useResizeObserver } from '@vueuse/core';
   import { useECharts } from '/@/hooks/web/useECharts';
   import { getTradeFlowSeries } from '/@/api/orderbook/orderbook';
@@ -66,6 +72,9 @@
   });
 
   const emit = defineEmits(['seek']);
+
+  // 收起/展开：收起后只留表头一行，后续卡片自动上移
+  const collapsed = ref(false);
 
   const windowMs = ref(3000);
   const windowOptions = [
@@ -376,6 +385,21 @@
     flex-wrap: wrap;
     gap: 4px;
     margin-bottom: 4px;
+  }
+
+  // 收起/展开按钮：贴 header 右端，收起时整卡只剩这一行
+  .collapse-btn {
+    margin-left: auto;
+    padding: 0 2px;
+    height: 20px;
+    color: #667085;
+    font-size: 11px;
+  }
+
+  .chart-card-title {
+    color: #425466;
+    font-size: 12px;
+    font-weight: 600;
   }
 
   .chart-controls {

@@ -1,6 +1,12 @@
 <template>
   <div class="chart-card summary-tables-card">
-    <div class="summary-tables">
+    <div class="chart-card-header">
+      <span class="chart-card-title">盘口统计表</span>
+      <Button class="collapse-btn" type="link" size="small" @click="collapsed = !collapsed">
+        {{ collapsed ? '展开' : '收起' }}
+      </Button>
+    </div>
+    <div v-show="!collapsed" class="summary-tables">
       <!-- 表一：买卖1-3 档位总量与订单数 -->
       <div class="summary-table-block">
         <div class="block-title">六档挂单量</div>
@@ -58,10 +64,16 @@
    * 表一 = 买卖1-3 档总量/订单数；表二 = 一档流量指标 × 细分时间窗。
    * 时间窗由 3s/1min 细分为 10ms/50ms/500ms/3s/1min（后端 pastTimeTradeInfo 已返回全部粒度）。
    */
+  import { ref } from 'vue';
+  import { Button } from 'ant-design-vue';
+
   defineProps({
     levelData: { type: Array, default: () => [] },
     tradeData: { type: Array, default: () => [] },
   });
+
+  // 收起/展开：收起后只留表头一行，后续卡片自动上移
+  const collapsed = ref(false);
 
   const timeColumns = [
     { key: 'last_10ms', label: '10ms' },
@@ -81,6 +93,27 @@
 <style lang="less" scoped>
   .summary-tables-card {
     min-height: 0;
+  }
+
+  .chart-card-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 4px;
+  }
+
+  .chart-card-title {
+    color: #425466;
+    font-size: 12px;
+    font-weight: 600;
+  }
+
+  // 收起/展开按钮：贴 header 右端，收起时整卡只剩这一行
+  .collapse-btn {
+    padding: 0 2px;
+    height: 20px;
+    color: #667085;
+    font-size: 11px;
   }
 
   .summary-tables {
