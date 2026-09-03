@@ -754,9 +754,6 @@
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
     gap: 6px;
-    max-height: 92px;
-    overflow-y: auto;
-    padding-right: 2px;
   }
 
   .stats-card {
