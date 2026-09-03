@@ -372,6 +372,9 @@
                     :class="'confidence-' + executionEstimateData.prediction.confidence"
                   >
                     可信度 {{ confidenceLabels[executionEstimateData.prediction.confidence] || '--' }}
+                    <template v-if="executionEstimateData.prediction.confidence_score != null">
+                      · {{ Math.round(executionEstimateData.prediction.confidence_score) }}分
+                    </template>
                   </span>
                 </Tooltip>
               </div>
@@ -423,7 +426,7 @@
               <!-- 逐窗口统计表：各窗口独立计算速率并给出预测，高亮行=头条预测所用窗口 -->
               <div v-if="executionEstimateData.prediction?.windows?.length" class="estimate-windows">
                 <div class="estimate-windows-title">
-                  分窗口统计（消耗/新增为{{ estimateSideLabel }}1口径<template v-if="hasSecondLevelNet">，{{ estimateSideLabel }}2净={{ estimateSideLabel }}2撤单−{{ estimateSideLabel }}2新增</template>；高亮行为上方预测所用窗口，速率为 手/秒）
+                  分窗口统计（消耗/新增为{{ estimateSideLabel }}1口径<template v-if="hasSecondLevelNet">，{{ estimateSideLabel }}2净={{ estimateSideLabel }}2撤单−{{ estimateSideLabel }}2新增</template>；速率为 手/秒；可信度得分=样本量/稳定性/外推距离/显著性/观察时长加权，高亮行=得分最高的可计算窗口，即上方预测所用窗口）
                 </div>
                 <table class="estimate-window-table">
                   <thead>
@@ -434,6 +437,7 @@
                       <th v-if="hasSecondLevelNet">{{ estimateSideLabel }}2净速度</th>
                       <th>净消耗速度</th>
                       <th>成交速度</th>
+                      <th>可信度得分</th>
                       <th>预计首次成交</th>
                       <th>预计全部成交</th>
                     </tr>
@@ -450,6 +454,18 @@
                       <td v-if="hasSecondLevelNet">{{ formatWindowRate(row.second_net_rate) }}</td>
                       <td>{{ formatWindowRate(row.net_queue_rate) }}</td>
                       <td>{{ formatWindowRate(row.trade_rate) }}</td>
+                      <td>
+                        <Tooltip v-if="!row.available && row.reason" :title="row.reason">
+                          <span class="cell-unavailable">--</span>
+                        </Tooltip>
+                        <span
+                          v-else
+                          class="window-score"
+                          :class="row.score >= 70 ? 'score-high' : row.score >= 40 ? 'score-medium' : 'score-low'"
+                        >
+                          {{ row.score }}
+                        </span>
+                      </td>
                       <td>
                         <Tooltip v-if="!row.available && row.reason" :title="row.reason">
                           <span class="cell-unavailable">不可估</span>
@@ -4147,6 +4163,15 @@
   .confidence-low {
     color: #b42318;
     background: #fee4e2;
+  }
+
+  // 分窗口表格的可信度得分配色与徽标一致
+  .window-score {
+    font-weight: 600;
+
+    &.score-high { color: #027a48; }
+    &.score-medium { color: #b54708; }
+    &.score-low { color: #b42318; }
   }
 
   .estimate-time-grid {

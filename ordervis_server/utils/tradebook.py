@@ -1048,16 +1048,51 @@ class TradeBook:
                 'full_fill_beyond_close': full_clock['beyond_close'],
             })
 
-        # 头条预测选行：多个窗口都能出预测时优先最长窗口（样本更多、外推误差更小），
-        # 要求成交样本 ≥3 笔且净消耗 >0；否则取最长的可出预测窗口；
-        # 所有窗口均不可计算时用最长窗口兜底展示原因
-        selected = next(
-            (row for row in reversed(window_rows) if row['trade_count'] >= 3 and row['net_queue_rate'] > 0),
-            None,
+        # 可信度评分模型（五个维度加权，每窗独立打分）：
+        #   样本量     S1 = min(1, 成交笔数/20)                 权重 20%
+        #   稳定性     S2 = max(0, 1 − 本窗净速度偏离各窗均值)    权重 30%（仅 1 窗可算时按中性 0.5）
+        #   外推距离   S3 = max(0, 1 − (预测等待/观察时长)/10)    权重 25%
+        #   显著性     S4 = min(1, |净速度|/(消耗+新增)/0.3)      权重 15%
+        #   观察时长   S5 = min(1, 实际观察秒数/120)              权重 10%
+        # 头条预测 = 得分最高的可计算窗口（同分取更长窗口）；全部不可计算时
+        # 最长窗口兜底展示原因，可信度直接判低。
+        available_rows = [row for row in window_rows if row['available']]
+        consensus_net = (
+            sum(row['net_queue_rate'] for row in available_rows) / len(available_rows)
+            if available_rows else 0.0
         )
-        if selected is None:
-            selected = next((row for row in reversed(window_rows) if row['available']), None)
-        if selected is None:
+        for row in window_rows:
+            if not row['available']:
+                row['score'] = None
+                row['score_parts'] = None
+                continue
+            elapsed = float(row['elapsed_seconds'] or 0)
+            net = row['net_queue_rate']
+            tc = row['trade_count']
+            s1 = min(1.0, tc / 20)
+            if len(available_rows) >= 2 and consensus_net > 0:
+                dev = abs(net - consensus_net) / consensus_net
+                s2 = max(0.0, 1.0 - dev)
+            else:
+                dev = None
+                s2 = 0.5  # 只有一个窗口可算，无法交叉验证，按中性计
+            wait_seconds = (row['first_fill_wait_ms'] or 0) / 1000
+            r = wait_seconds / elapsed if elapsed > 0 else float('inf')
+            s3 = max(0.0, 1.0 - r / 10) if r != float('inf') else 0.0
+            total_flow = row['depletion_rate'] + row['arrival_rate']
+            q = abs(net) / total_flow if total_flow > 0 else 0.0
+            s4 = min(1.0, q / 0.3)
+            s5 = min(1.0, elapsed / 120)
+            score = 100 * (0.20 * s1 + 0.30 * s2 + 0.25 * s3 + 0.15 * s4 + 0.10 * s5)
+            row['score'] = round(score, 1)
+            row['score_parts'] = {
+                's1': s1, 's2': s2, 's3': s3, 's4': s4, 's5': s5,
+                'dev': dev, 'r': r, 'q': q,
+            }
+
+        if available_rows:
+            selected = max(available_rows, key=lambda row: (row['score'], row['window_ms']))
+        else:
             selected = window_rows[-1]
         selected['selected'] = True
 
@@ -1066,10 +1101,7 @@ class TradeBook:
         if not selected['available'] and selected['reason']:
             warnings.append(selected['reason'])
 
-        # 可信度判定（偏严格）：高 = 成交 ≥20 笔且观察 ≥120s；中 = 成交 ≥5 笔且观察 ≥30s；
-        # 其余为低；所有窗口都算不出预测时直接判低，并给出专门说明
-        trade_count = selected['trade_count']
-        observed_seconds = float(selected['elapsed_seconds'] or 0)
+        selected_score = selected['score'] if selected['score'] is not None else 0.0
         if not selected['available']:
             confidence = 'low'
             confidence_reasons = [
@@ -1077,23 +1109,25 @@ class TradeBook:
             ]
             if selected['reason']:
                 confidence_reasons.append(f'兜底窗口（{selected["window_ms"] // 1000}s）：{selected["reason"]}')
-        elif trade_count >= 20 and observed_seconds >= 120:
-            confidence = 'high'
-            confidence_reasons = [
-                f'最优价成交笔数 {trade_count} 笔（高可信度需 ≥20 笔）',
-                f'流量观察时长 {observed_seconds:.0f} 秒（高可信度需 ≥120 秒）',
-            ]
-        elif trade_count >= 5 and observed_seconds >= 30:
-            confidence = 'medium'
-            confidence_reasons = [
-                f'最优价成交笔数 {trade_count} 笔（高可信度需 ≥20 笔）',
-                f'流量观察时长 {observed_seconds:.0f} 秒（高可信度需 ≥120 秒）',
-            ]
         else:
-            confidence = 'low'
+            if selected_score >= 70:
+                confidence = 'high'
+            elif selected_score >= 40:
+                confidence = 'medium'
+            else:
+                confidence = 'low'
+            parts = selected['score_parts']
             confidence_reasons = [
-                f'最优价成交笔数仅 {trade_count} 笔（中可信度需 ≥5 笔，高需 ≥20 笔）',
-                f'流量观察时长 {observed_seconds:.0f} 秒（中可信度需 ≥30 秒，高需 ≥120 秒）',
+                f'总分 {selected_score:.0f}/100（≥70 高，40~70 中，<40 低），窗口 {selected["actual_window_ms"] // 1000}s',
+                f'样本量 {parts["s1"] * 100:.0f} 分（权重20%）：窗口内最优价成交 {selected["trade_count"]} 笔，20 笔满分',
+                (
+                    f'稳定性 {parts["s2"] * 100:.0f} 分（权重30%）：本窗净速度偏离各可计算窗口均值 {parts["dev"] * 100:.0f}%'
+                    if parts['dev'] is not None
+                    else f'稳定性 {parts["s2"] * 100:.0f} 分（权重30%）：仅一个窗口可计算，无法交叉验证，按中性 50 分计'
+                ),
+                f'外推距离 {parts["s3"] * 100:.0f} 分（权重25%）：预测等待 {selected["first_fill_wait_ms"] / 60000:.1f} 分钟 ≈ 观察时长的 {parts["r"]:.1f} 倍，10 倍以上归零',
+                f'净速率显著性 {parts["s4"] * 100:.0f} 分（权重15%）：净流量占队列总流量 {parts["q"] * 100:.0f}%，30% 以上满分',
+                f'观察时长 {parts["s5"] * 100:.0f} 分（权重10%）：实际观察 {float(selected["elapsed_seconds"] or 0):.0f} 秒，120 秒满分',
             ]
 
         return {
@@ -1110,6 +1144,7 @@ class TradeBook:
                 'available': selected['available'],
                 'lookahead_safe': True,
                 'confidence': confidence,
+                'confidence_score': selected_score,
                 'confidence_reasons': confidence_reasons,
                 'price_active': price_active,
                 'has_filled_as_of': has_filled_as_of,
@@ -1129,11 +1164,11 @@ class TradeBook:
                 'warnings': warnings,
                 'basis': {
                     'queue_window_ms': selected['actual_window_ms'],
-                    'queue_observed_seconds': observed_seconds,
+                    'queue_observed_seconds': float(selected['elapsed_seconds'] or 0),
                     'queue_depleted_volume': selected['depleted_volume'],
                     'queue_arrived_volume': selected['arrived_volume'],
                     'trade_window_ms': selected['actual_window_ms'],
-                    'trade_count': trade_count,
+                    'trade_count': selected['trade_count'],
                     'trade_volume': selected['trade_volume'],
                     'average_trade_size': selected['average_trade_size'],
                 },
