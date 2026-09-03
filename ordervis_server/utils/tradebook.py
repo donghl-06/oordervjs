@@ -1048,14 +1048,15 @@ class TradeBook:
                 'full_fill_beyond_close': full_clock['beyond_close'],
             })
 
-        # 头条预测选行：优先最短且成交样本 ≥3、净消耗 >0 的窗口；
-        # 否则最短的可出预测窗口；都不行时用最长窗口兜底展示原因
+        # 头条预测选行：多个窗口都能出预测时优先最长窗口（样本更多、外推误差更小），
+        # 要求成交样本 ≥3 笔且净消耗 >0；否则取最长的可出预测窗口；
+        # 所有窗口均不可计算时用最长窗口兜底展示原因
         selected = next(
-            (row for row in window_rows if row['trade_count'] >= 3 and row['net_queue_rate'] > 0),
+            (row for row in reversed(window_rows) if row['trade_count'] >= 3 and row['net_queue_rate'] > 0),
             None,
         )
         if selected is None:
-            selected = next((row for row in window_rows if row['available']), None)
+            selected = next((row for row in reversed(window_rows) if row['available']), None)
         if selected is None:
             selected = window_rows[-1]
         selected['selected'] = True
@@ -1065,28 +1066,35 @@ class TradeBook:
         if not selected['available'] and selected['reason']:
             warnings.append(selected['reason'])
 
+        # 可信度判定（偏严格）：高 = 成交 ≥20 笔且观察 ≥120s；中 = 成交 ≥5 笔且观察 ≥30s；
+        # 其余为低；所有窗口都算不出预测时直接判低，并给出专门说明
         trade_count = selected['trade_count']
         observed_seconds = float(selected['elapsed_seconds'] or 0)
-        if trade_count >= 10 and observed_seconds >= 15:
+        if not selected['available']:
+            confidence = 'low'
+            confidence_reasons = [
+                '所有候选窗口（30s/2min/5min/10min）均无法计算预测时间，预测不可用',
+            ]
+            if selected['reason']:
+                confidence_reasons.append(f'兜底窗口（{selected["window_ms"] // 1000}s）：{selected["reason"]}')
+        elif trade_count >= 20 and observed_seconds >= 120:
             confidence = 'high'
             confidence_reasons = [
-                f'最优价成交笔数 {trade_count} 笔（高可信度需 ≥10 笔）',
-                f'流量观察时长 {observed_seconds:.0f} 秒（高可信度需 ≥15 秒）',
+                f'最优价成交笔数 {trade_count} 笔（高可信度需 ≥20 笔）',
+                f'流量观察时长 {observed_seconds:.0f} 秒（高可信度需 ≥120 秒）',
             ]
-        elif trade_count >= 3 or (trade_count > 0 and selected['depletion_rate'] > 0):
+        elif trade_count >= 5 and observed_seconds >= 30:
             confidence = 'medium'
             confidence_reasons = [
-                f'最优价成交笔数 {trade_count} 笔（高可信度需 ≥10 笔）',
-                f'流量观察时长 {observed_seconds:.0f} 秒（高可信度需 ≥15 秒）',
+                f'最优价成交笔数 {trade_count} 笔（高可信度需 ≥20 笔）',
+                f'流量观察时长 {observed_seconds:.0f} 秒（高可信度需 ≥120 秒）',
             ]
         else:
             confidence = 'low'
             confidence_reasons = [
-                f'最优价成交笔数仅 {trade_count} 笔（中可信度需 ≥3 笔，高需 ≥10 笔）',
-                f'窗口内队列消耗 {selected["depleted_volume"]:.0f} 手，样本不足',
+                f'最优价成交笔数仅 {trade_count} 笔（中可信度需 ≥5 笔，高需 ≥20 笔）',
+                f'流量观察时长 {observed_seconds:.0f} 秒（中可信度需 ≥30 秒，高需 ≥120 秒）',
             ]
-        if not selected['available'] and selected['reason']:
-            confidence_reasons.append(selected['reason'])
 
         return {
             'success': True,
