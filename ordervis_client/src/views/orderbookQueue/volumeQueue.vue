@@ -458,13 +458,24 @@
                         <Tooltip v-if="!row.available && row.reason" :title="row.reason">
                           <span class="cell-unavailable">--</span>
                         </Tooltip>
-                        <span
-                          v-else
-                          class="window-score"
-                          :class="row.score >= 70 ? 'score-high' : row.score >= 40 ? 'score-medium' : 'score-low'"
-                        >
-                          {{ row.score }}
-                        </span>
+                        <Tooltip v-else placement="left" overlay-class-name="score-tip-overlay">
+                          <template #title>
+                            <table class="score-tip-table">
+                              <tbody>
+                                <tr v-for="item in scoreTipRows(row)" :key="item.name">
+                                  <td class="score-tip-name">{{ item.name }}（{{ item.max }}分）</td>
+                                  <td class="score-tip-value">{{ item.raw }} → {{ item.score }}分</td>
+                                </tr>
+                              </tbody>
+                            </table>
+                          </template>
+                          <span
+                            class="window-score"
+                            :class="row.score >= 70 ? 'score-high' : row.score >= 40 ? 'score-medium' : 'score-low'"
+                          >
+                            {{ row.score }}
+                          </span>
+                        </Tooltip>
                       </td>
                       <td>
                         <Tooltip v-if="!row.available && row.reason" :title="row.reason">
@@ -2369,6 +2380,39 @@
        return numeric.toLocaleString('zh-CN', { maximumFractionDigits: 2 });
      };
 
+     // 窗口得分悬浮的细分表：指标列只列名称+满分，得分列=原始数据 + 加权后得分
+     const formatPartScore = (value) => {
+       const numeric = Number(value);
+       if (!Number.isFinite(numeric)) return '--';
+       return Number.isInteger(numeric) ? String(numeric) : numeric.toFixed(1);
+     };
+     const scoreTipRows = (row) => {
+       const p = row?.score_parts || {};
+       const elapsed = Math.round(Number(row?.elapsed_seconds) || 0);
+       const waitMin = (Number(row?.first_fill_wait_ms) || 0) / 60000;
+       const r = Number(p.r);
+       const q = Number(p.q);
+       return [
+         { name: '样本量', max: 20, raw: `成交 ${row?.trade_count ?? 0} 笔`, score: formatPartScore((p.s1 ?? 0) * 20) },
+         {
+           name: '稳定性', max: 30,
+           raw: p.dev == null ? '仅单窗，按中性计' : `偏离各窗均值 ${(p.dev * 100).toFixed(0)}%`,
+           score: formatPartScore((p.s2 ?? 0) * 30),
+         },
+         {
+           name: '外推距离', max: 25,
+           raw: Number.isFinite(r) ? `等待 ${waitMin.toFixed(1)} 分钟 ≈ ${r.toFixed(1)} 倍观察` : '--',
+           score: formatPartScore((p.s3 ?? 0) * 25),
+         },
+         {
+           name: '净速率显著性', max: 15,
+           raw: Number.isFinite(q) ? `净流量占 ${(q * 100).toFixed(0)}%` : '--',
+           score: formatPartScore((p.s4 ?? 0) * 15),
+         },
+         { name: '观察时长', max: 10, raw: `${elapsed} 秒`, score: formatPartScore((p.s5 ?? 0) * 10) },
+       ];
+     };
+
      // 仅三档订单的窗口行携带买2/卖2净速度列
      const hasSecondLevelNet = computed(() =>
        (executionEstimateData.value?.prediction?.windows || []).some(
@@ -4229,4 +4273,34 @@
     max-width: calc(100vw - 64px);
   }
 
+</style>
+
+<!-- 悬浮细分表渲染在 body（teleport），scoped 覆盖不到，单独全局样式 -->
+<style lang="less">
+  .score-tip-overlay {
+    .ant-tooltip-inner {
+      padding: 8px 10px;
+    }
+
+    .score-tip-table {
+      border-collapse: collapse;
+      font-size: 12px;
+      font-variant-numeric: tabular-nums;
+
+      td {
+        padding: 2px 6px;
+        white-space: nowrap;
+      }
+
+      .score-tip-name {
+        color: rgba(255, 255, 255, 0.75);
+      }
+
+      .score-tip-value {
+        color: #fff;
+        font-weight: 600;
+        text-align: right;
+      }
+    }
+  }
 </style>

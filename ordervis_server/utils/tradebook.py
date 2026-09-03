@@ -1116,18 +1116,9 @@ class TradeBook:
                 confidence = 'medium'
             else:
                 confidence = 'low'
-            parts = selected['score_parts']
+            # 徽标悬浮只展示分档区间；各维度细分在分窗口表格的得分悬浮中展示
             confidence_reasons = [
-                f'总分 {selected_score:.0f}/100（≥70 高，40~70 中，<40 低），窗口 {selected["actual_window_ms"] // 1000}s',
-                f'样本量 {parts["s1"] * 100:.0f} 分（权重20%）：窗口内最优价成交 {selected["trade_count"]} 笔，20 笔满分',
-                (
-                    f'稳定性 {parts["s2"] * 100:.0f} 分（权重30%）：本窗净速度偏离各可计算窗口均值 {parts["dev"] * 100:.0f}%'
-                    if parts['dev'] is not None
-                    else f'稳定性 {parts["s2"] * 100:.0f} 分（权重30%）：仅一个窗口可计算，无法交叉验证，按中性 50 分计'
-                ),
-                f'外推距离 {parts["s3"] * 100:.0f} 分（权重25%）：预测等待 {selected["first_fill_wait_ms"] / 60000:.1f} 分钟 ≈ 观察时长的 {parts["r"]:.1f} 倍，10 倍以上归零',
-                f'净速率显著性 {parts["s4"] * 100:.0f} 分（权重15%）：净流量占队列总流量 {parts["q"] * 100:.0f}%，30% 以上满分',
-                f'观察时长 {parts["s5"] * 100:.0f} 分（权重10%）：实际观察 {float(selected["elapsed_seconds"] or 0):.0f} 秒，120 秒满分',
+                '高：总分 ≥ 70 分；中：40 ~ 70 分；低：< 40 分',
             ]
 
         return {
