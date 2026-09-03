@@ -64,7 +64,7 @@
           </tr>
         </thead>
         <tbody>
-          <tr v-for="row in summaryRows" :key="row.id">
+          <tr v-for="row in summaryRows" :key="row.id" :style="{ color: row.color }">
             <td>
               <span class="summary-id" :style="{ borderColor: row.color, color: row.color }">{{ row.id }}</span>
             </td>
@@ -856,7 +856,7 @@
     }
 
     td {
-      color: #1d2939;
+      color: inherit;
     }
   }
 
