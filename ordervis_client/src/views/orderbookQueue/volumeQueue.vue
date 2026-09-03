@@ -271,9 +271,11 @@
       </div>
 
       <!-- ③ 右侧图表区：盘口统计表 + Q-t 窗口图 + 锁定订单图 -->
-      <div class="ov-chart-area">
+      <!-- 未锁定订单时 Q-t 图撑满右栏；锁定后统计表与 Q-t 图固定置顶，锁定订单图占剩余空间 -->
+      <div class="ov-chart-area" :class="{ 'has-locked': lockedOrderIds.length > 0 }">
         <SummaryTables :level-data="levelData" :trade-data="tradeData" />
         <TradeFlowChart
+          class="flow-card"
           :sym="selectSym"
           :date="selectDate"
           :current-time="selectTime"
@@ -284,6 +286,7 @@
         />
         <LockedOrderChart
           v-if="lockedOrderIds.length"
+          class="locked-order-card"
           :sym="selectSym"
           :date="selectDate"
           :locked-ids="lockedOrderIds"
@@ -3493,7 +3496,9 @@
   }
 
   .ov-data-area {
+    display: flex;
     flex: 0 0 55%;
+    flex-direction: column;
     min-width: 0;
     height: 100%;
     overflow-y: auto;
@@ -3507,6 +3512,24 @@
     display: flex;
     flex-direction: column;
     gap: 8px;
+
+    // 统计表/Q-t 图固定置顶，不被锁定订单图挤出首屏
+    > .chart-card {
+      flex: 0 0 auto;
+    }
+
+    // 未锁定：Q-t 图撑满右栏剩余高度
+    &:not(.has-locked) > .flow-card {
+      flex: 1 1 auto;
+      min-height: 0;
+    }
+
+    // 已锁定：锁定订单图占剩余空间，内容超出时卡内滚动
+    &.has-locked > .locked-order-card {
+      flex: 1 1 auto;
+      min-height: 0;
+      overflow-y: auto;
+    }
   }
 
   .chart-card {
@@ -3534,14 +3557,16 @@
     border-radius: 4px;
   }
 
-  // ② 队列区：买左卖右，档内 3 在左/右外侧、1 靠中间
+  // ② 队列区：买左卖右，档内 3 在左/右外侧、1 靠中间；纵向撑满左栏
   .ov-queue-zones {
     display: flex;
+    flex: 1;
     gap: 8px;
+    min-height: 0;
   }
 
   .ov-queue-zones.expanded {
-    display: block;
+    flex-direction: column;
   }
 
   .ov-queue-zones.expanded .ov-zone {
@@ -3549,8 +3574,11 @@
   }
 
   .ov-zone {
+    display: flex;
     flex: 1;
+    flex-direction: column;
     min-width: 0;
+    min-height: 0;
   }
 
   // 窄屏：图表区收到底部，解除等高约束恢复自然流式高度

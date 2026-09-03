@@ -114,7 +114,7 @@
   import { ref, computed, watch, nextTick } from 'vue';
   import { Select, Radio, Tooltip } from 'ant-design-vue';
   import { QuestionCircleOutlined } from '@ant-design/icons-vue';
-  import { useDebounceFn } from '@vueuse/core';
+  import { useDebounceFn, useResizeObserver } from '@vueuse/core';
   import { useECharts } from '/@/hooks/web/useECharts';
   import { getOrderLifecycle, getOrderQueueSeries } from '/@/api/orderbook/orderbook';
   import { parseTimeToMs, formatMsToTimeStr } from '../composables/useSnapshotNavigation';
@@ -178,6 +178,12 @@
 
   const chartEl = ref(null);
   const { setOptions, getInstance } = useECharts(chartEl, computed(() => (props.dark ? 'dark' : 'light')));
+
+  // 卡片高度随右栏弹性分配，容器尺寸变化时纠正画布
+  useResizeObserver(
+    chartEl,
+    useDebounceFn(() => getInstance()?.resize(), 100),
+  );
 
   // 必须定义在 immediate 监听器之前，避免组件首次挂载时访问未初始化的 const。
   const fetchLifecycle = async (id) => {
@@ -696,6 +702,11 @@
 </script>
 
 <style lang="less" scoped>
+  .chart-card {
+    display: flex;
+    flex-direction: column;
+  }
+
   .chart-card-header {
     display: flex;
     align-items: center;
@@ -873,8 +884,9 @@
   }
 
   .lock-chart {
-    height: 160px;
+    flex: 1;
     width: 100%;
+    min-height: 140px;
   }
 
 

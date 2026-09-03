@@ -210,6 +210,10 @@
 
 <style lang="less" scoped>
   .main-mode {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    min-height: 0;
     .header-container {
       display: flex;
       align-items: center;
@@ -247,32 +251,32 @@
     }
 
     .table-container {
+      flex: 1;
       margin-top: 0px;
-      margin-bottom: 10px;
+      margin-bottom: 8px;
       border: 1px solid #d9d9d9;
       border-radius: 4px;
       background-color: #fff;
-      min-height: 162px; /* 最少4行的高度 */
-      max-height: 162px; /* 设置最大高度，超出时显示滚动条 */
-      overflow-y: auto; /* 数据过多时显示垂直滚动条 */
+      min-height: 0; /* flex 撑满父级，由父级分配高度 */
+      overflow-y: auto; /* 订单过多时显示垂直滚动条 */
       overflow-x: hidden; /* 隐藏水平滚动条 */
-    }
-
-    .table-container.fullscreen {
-      min-height: 360px;
-      max-height: calc(100vh - 220px);
     }
 
     .volume-grid {
       display: grid;
       /* 列数由模板内联样式控制（cols prop / 全屏6列） */
+      grid-auto-rows: minmax(36px, 1fr); /* 行高自适应撑满容器，订单多时保持最小行高滚动 */
       gap: 0px; /* 移除间隙 */
       width: 100%;
+      min-height: 100%; /* 订单少时拉伸填满，订单多时超出滚动 */
       padding: 0px; /* 移除内边距 */
     }
 
+    .volume-grid.fullscreen {
+      grid-auto-rows: minmax(52px, 1fr);
+    }
+
     .volume-grid.fullscreen .volume-cell {
-      height: 64px;
       font-size: 16px;
     }
 
@@ -280,7 +284,6 @@
       display: flex;
       align-items: center;
       justify-content: center;
-      height: 40px; /* 固定高度，确保4行正好填满容器 */
       font-size: 11px;
       font-variant-numeric: tabular-nums; /* D2 等宽数字 */
       border: 1px solid #d9d9d9;

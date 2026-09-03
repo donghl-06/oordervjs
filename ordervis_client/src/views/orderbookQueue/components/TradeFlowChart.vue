@@ -40,7 +40,7 @@
 <script lang="js" setup>
   import { ref, computed, watch, nextTick } from 'vue';
   import { Select, Checkbox } from 'ant-design-vue';
-  import { useDebounceFn } from '@vueuse/core';
+  import { useDebounceFn, useResizeObserver } from '@vueuse/core';
   import { useECharts } from '/@/hooks/web/useECharts';
   import { getTradeFlowSeries } from '/@/api/orderbook/orderbook';
   import { parseTimeToMs, formatMsToTimeStr } from '../composables/useSnapshotNavigation';
@@ -107,6 +107,12 @@
 
   const chartEl = ref(null);
   const { setOptions, getInstance } = useECharts(chartEl, computed(() => (props.dark ? 'dark' : 'light')));
+
+  // 卡片高度随布局弹性变化（锁定订单图出现/消失），容器尺寸变化时纠正画布
+  useResizeObserver(
+    chartEl,
+    useDebounceFn(() => getInstance()?.resize(), 100),
+  );
 
   const buckets = ref([]);
   const fetching = ref(false);
@@ -358,6 +364,11 @@
 </script>
 
 <style lang="less" scoped>
+  .chart-card {
+    display: flex;
+    flex-direction: column;
+  }
+
   .chart-card-header {
     display: flex;
     align-items: center;
@@ -406,7 +417,18 @@
   }
 
   .flow-chart {
-    height: 160px;
     width: 100%;
+    height: 160px;
+  }
+
+  // 未锁定订单时（父级 ov-chart-area 无 has-locked），本卡撑满右栏剩余高度
+  .ov-chart-area:not(.has-locked) > .chart-card {
+    min-height: 0;
+
+    .flow-chart {
+      flex: 1;
+      height: auto;
+      min-height: 160px;
+    }
   }
 </style>
