@@ -67,7 +67,8 @@ class TradeBook:
         self._csord_df: Optional[pd.DataFrame] = None
         self._cstra_df: Optional[pd.DataFrame] = None
         self._order_price_map: Optional[Dict[int, float]] = None
-        self._best_cancel_records: Optional[List[Dict]] = None
+        # 撤单修补记录缓存：{档位序号(0=一档, 1=二档): [records]}
+        self._cancel_records_cache: Dict[int, List[Dict]] = {}
         self._trade_price_records: Optional[List[Dict]] = None
         self._order_meta_map: Optional[Dict[int, Dict[str, Any]]] = None
         self._passive_trade_records: Optional[List[Dict[str, Any]]] = None
@@ -202,24 +203,27 @@ class TradeBook:
 
     # ---------- 流量时间序列（C2） ----------
 
-    def _best_level_cancel_volumes(self, start_ms: int, end_ms: int) -> List[Dict]:
+    def _cancel_records_at_level(self, level_index: int) -> List[Dict]:
         """
-        修补引擎撤单计数器（恒为0）：从 cstra 撤单记录(et=2)计算买一/卖一撤单量。
-        判定：撤单按 orderid 归属买/卖侧；该订单挂单价 == 撤单时刻买一/卖一价 → 计入一档。
-        Returns: [{'time_ms': ..., 'side': 'bid'|'ask', 'volume': ...}, ...]
+        修补引擎撤单计数器（恒为0）：从 cstra 撤单记录(et=2)计算指定档位撤单量。
+        判定：撤单按 orderid 归属买/卖侧；该订单挂单价 == 撤单时刻的第 level_index+1 档价 → 计入。
+        level_index: 0=买一/卖一, 1=买二/卖二
+        Returns: 全日内记录 [{'time_ms': ..., 'side': 'bid'|'ask', 'volume': ...}, ...]，按时间排序
         """
-        if self._best_cancel_records is not None:
-            return [r for r in self._best_cancel_records if start_ms < r['time_ms'] <= end_ms]
+        if level_index in self._cancel_records_cache:
+            return self._cancel_records_cache[level_index]
 
         self._load_tick_data()
         records = []
         if self._cstra_df is None or self._csord_df is None:
+            self._cancel_records_cache[level_index] = records
             return records
         try:
             # 撤单行
             et = self._cstra_df['exectype'].astype(str).str.strip("b' ")
             cancels = self._cstra_df[et == '2']
             if cancels.empty:
+                self._cancel_records_cache[level_index] = records
                 return records
             # orderid -> price 映射（懒构建缓存）
             if self._order_price_map is None:
@@ -242,17 +246,28 @@ class TradeBook:
                 if not md or not md.get('market_data'):
                     continue
                 mdd = md['market_data']
-                best_bid = (mdd.get('best_bids') or [None])[0]
-                best_ask = (mdd.get('best_asks') or [None])[0]
+                best_bids = mdd.get('best_bids') or []
+                best_asks = mdd.get('best_asks') or []
+                best_bid = best_bids[level_index] if len(best_bids) > level_index else None
+                best_ask = best_asks[level_index] if len(best_asks) > level_index else None
                 price_int = round(price * 10000)
                 if side == 1 and best_bid is not None and price_int == best_bid:
                     records.append({'time_ms': _time_to_ms(time_part), 'side': 'bid', 'volume': float(row['size'])})
                 elif side == -1 and best_ask is not None and price_int == best_ask:
                     records.append({'time_ms': _time_to_ms(time_part), 'side': 'ask', 'volume': float(row['size'])})
         except Exception as e:
-            self.logger.n_log(f"撤单量修补计算失败: {self.get_key()}, 错误: {e}", self.log_level.ERROR)
-        self._best_cancel_records = sorted(records, key=lambda r: r['time_ms'])
-        return [r for r in self._best_cancel_records if start_ms < r['time_ms'] <= end_ms]
+            self.logger.n_log(f"撤单量修补计算失败(档位{level_index + 1}): {self.get_key()}, 错误: {e}", self.log_level.ERROR)
+        records = sorted(records, key=lambda r: r['time_ms'])
+        self._cancel_records_cache[level_index] = records
+        return records
+
+    def _best_level_cancel_volumes(self, start_ms: int, end_ms: int) -> List[Dict]:
+        """买一/卖一撤单量（level_index=0，口径见 _cancel_records_at_level）"""
+        return [r for r in self._cancel_records_at_level(0) if start_ms < r['time_ms'] <= end_ms]
+
+    def _second_level_cancel_volumes(self, start_ms: int, end_ms: int) -> List[Dict]:
+        """买二/卖二撤单量（level_index=1）"""
+        return [r for r in self._cancel_records_at_level(1) if start_ms < r['time_ms'] <= end_ms]
 
     def _get_trade_price_records(self, start_ms: int, end_ms: int) -> List[Dict]:
         """返回时间范围内的逐笔成交价，结果按时间排序并缓存。"""
@@ -779,16 +794,55 @@ class TradeBook:
             'arrival_rate': arrived / elapsed_seconds,
         }
 
-    @staticmethod
-    def _select_flow_sample(samples: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """优先选最短且观察到真实消耗的窗口；都无效时用最长窗口。"""
-        for sample in samples:
-            if sample['elapsed_seconds'] >= 10 and sample['depleted_volume'] > 0:
-                return sample
-        for sample in samples:
-            if sample['elapsed_seconds'] >= 10:
-                return sample
-        return samples[-1]
+    def _second_level_flow_sample(
+        self,
+        side: str,
+        end_ms: int,
+        window_ms: int,
+    ) -> Dict[str, Any]:
+        """
+        买2/卖2档流量采样（供三档订单预测）。二档非最优价时不发生成交，
+        消耗 = 撤单速度（CSV 修补口径）；新增挂单由 Δ二档总量 = 新增 − 撤单 反推。
+        引擎没有二档计数器，总量取窗口两端完整快照（query_by_time）。
+        """
+        start_ms = max(
+            end_ms - window_ms,
+            self._session_start_for_time(end_ms),
+        )
+        duration_ms = max(0, end_ms - start_ms)
+        if duration_ms <= 0:
+            return {
+                'window_ms': window_ms,
+                'actual_window_ms': 0,
+                'elapsed_seconds': 0.0,
+                'depleted_volume': 0.0,
+                'arrived_volume': 0.0,
+                'depletion_rate': 0.0,
+                'arrival_rate': 0.0,
+            }
+
+        def _level2_volume(time_ms: int) -> float:
+            snap = self.visualizer.query_by_time(self.date, _ms_to_time(time_ms)) or {}
+            level = (snap.get('levels') or {}).get(f'{side}2') or {}
+            return float(level.get('total_volume') or 0)
+
+        v0 = _level2_volume(start_ms)
+        v1 = _level2_volume(end_ms)
+        cancel_volume = sum(
+            r['volume'] for r in self._second_level_cancel_volumes(start_ms, end_ms)
+            if r['side'] == side
+        )
+        elapsed_seconds = duration_ms / 1000
+        arrived = max(0.0, (v1 - v0) + cancel_volume)
+        return {
+            'window_ms': window_ms,
+            'actual_window_ms': duration_ms,
+            'elapsed_seconds': elapsed_seconds,
+            'depleted_volume': cancel_volume,
+            'arrived_volume': arrived,
+            'depletion_rate': cancel_volume / elapsed_seconds,
+            'arrival_rate': arrived / elapsed_seconds,
+        }
 
     def _same_price_trade_sample(
         self,
@@ -815,17 +869,6 @@ class TradeBook:
             'trade_count': len(matching),
             'average_trade_size': volume / len(matching) if matching else 0.0,
         }
-
-    @staticmethod
-    def _select_adaptive_sample(samples: List[Dict[str, Any]], sample_type: str) -> Dict[str, Any]:
-        if sample_type == 'trade':
-            for sample in samples:
-                if sample['trade_count'] >= 3:
-                    return sample
-            for sample in reversed(samples):
-                if sample['trade_count'] > 0:
-                    return sample
-        return samples[-1]
 
     @staticmethod
     def _add_trading_wait(time_str: str, wait_seconds: Optional[float]) -> Dict[str, Any]:
@@ -941,71 +984,110 @@ class TradeBook:
         best_price_raw = best_level.get('price')
         best_price = float(best_price_raw) / 10000 if best_price_raw is not None else meta['price']
 
-        candidate_windows = [30000, 120000, 600000]
-        flow_samples = [
-            self._best_level_flow_sample(side_key, end_ms, window)
-            for window in candidate_windows
-        ]
-        trade_samples = [
-            self._same_price_trade_sample(side_sign, best_price, end_ms, window)
-            for window in candidate_windows
-        ]
-        flow_sample = self._select_flow_sample(flow_samples)
-        trade_sample = self._select_adaptive_sample(trade_samples, 'trade')
+        candidate_windows = [30000, 120000, 300000, 600000]
+        # 每个候选窗口独立计算一组速率与预测（弹窗按窗口表格逐行展示），
+        # 再从中自适应选一行作为顶部卡片的头条预测。
+        # 净速度口径：买1档 = 买1消耗（新挂单排在其身后，不影响）；
+        # 买2档 = 买1消耗 − 买1新增；
+        # 买3档 = (买1消耗 − 买1新增) + (买2消耗 − 买2新增)，买2不发生成交，其消耗=撤单。
+        window_rows = []
+        for window in candidate_windows:
+            flow1 = self._best_level_flow_sample(side_key, end_ms, window)
+            trade = self._same_price_trade_sample(side_sign, best_price, end_ms, window)
+            depletion = float(flow1.get('depletion_rate', 0) or 0)
+            arrival = float(flow1.get('arrival_rate', 0) or 0)
+            net1 = depletion if rank == 1 else depletion - arrival
+            second_net = None
+            net = net1
+            if rank == 3:
+                flow2 = self._second_level_flow_sample(side_key, end_ms, window)
+                second_net = flow2['depletion_rate'] - flow2['arrival_rate']
+                net = net1 + second_net
+            trade_rate = float(trade.get('rate', 0) or 0)
 
-        depletion_rate = float(flow_sample.get('depletion_rate', 0) or 0)
-        arrival_rate = float(flow_sample.get('arrival_rate', 0) or 0)
-        trade_rate = float(trade_sample.get('rate', 0) or 0)
-        # 买1档订单：新挂单排在其身后，不影响等待，净速度 = 消耗速度；
-        # 买2/买3档：更高档位的新挂单会插到身前，净速度 = 消耗速度 − 新增挂单速度
-        net_queue_rate = depletion_rate if rank == 1 else depletion_rate - arrival_rate
-        price_active = rank == 1
-        warnings = []
-
-        if trade_rate <= 0:
-            first_wait = None
-            full_wait = None
-            queue_wait = None
-            warnings.append(f'统计窗口内没有可识别的{side_label}1价成交，暂时无法给出成交时间')
-        else:
-            if net_queue_rate > 0:
-                queue_wait = ahead_total / net_queue_rate
-            elif rank > 1 and arrival_rate > 0:
-                queue_wait = None
-                warnings.append(
-                    f'{side_label}1新增挂单速度不低于消耗速度，身前队列预计不会缩短，无法给出排队时间'
-                )
-            else:
-                queue_wait = None
-                warnings.append(f'近期未观察到{side_label}1队列消耗，暂时无法估算排队时间')
-            if queue_wait is None:
+            if net <= 0 or trade_rate <= 0:
                 first_wait = None
                 full_wait = None
+                if net <= 0 and rank > 1 and (arrival > 0 or (second_net is not None and second_net < 0)):
+                    reason = f'{side_label}1新增挂单速度不低于消耗速度，身前队列预计不会缩短'
+                elif net <= 0:
+                    reason = f'窗口内未观察到{side_label}1队列净消耗'
+                else:
+                    reason = f'窗口内没有可识别的{side_label}1价成交'
             else:
-                average_trade_size = float(trade_sample.get('average_trade_size', 0) or 0)
+                queue_wait = ahead_total / net
+                average_trade_size = float(trade.get('average_trade_size', 0) or 0)
                 typical_fill = min(remaining_volume, average_trade_size or remaining_volume)
                 first_wait = queue_wait + typical_fill / trade_rate
                 full_wait = queue_wait + remaining_volume / trade_rate
+                reason = None
 
-        if not price_active:
-            warnings.append(
-                f'订单当前不在最优价，身前总量已包含更高档位全部等待量，'
-                f'统一按{side_label}1消耗/新增速度估算，未单独预测价格何时到达该档位'
-            )
+            first_clock = self._add_trading_wait(time_str, first_wait)
+            full_clock = self._add_trading_wait(time_str, full_wait)
+            window_rows.append({
+                'window_ms': window,
+                'actual_window_ms': flow1['actual_window_ms'],
+                'elapsed_seconds': flow1['elapsed_seconds'],
+                'depleted_volume': flow1['depleted_volume'],
+                'arrived_volume': flow1['arrived_volume'],
+                'depletion_rate': depletion,
+                'arrival_rate': arrival,
+                'second_net_rate': second_net,
+                'net_queue_rate': net,
+                'trade_rate': trade_rate,
+                'trade_count': int(trade.get('trade_count', 0) or 0),
+                'trade_volume': trade.get('trade_volume', 0),
+                'average_trade_size': trade.get('average_trade_size', 0),
+                'available': first_wait is not None,
+                'reason': reason,
+                'first_fill_wait_ms': round(first_wait * 1000) if first_wait is not None else None,
+                'full_fill_wait_ms': round(full_wait * 1000) if full_wait is not None else None,
+                'first_fill_time': first_clock['time'],
+                'full_fill_time': full_clock['time'],
+                'first_fill_beyond_close': first_clock['beyond_close'],
+                'full_fill_beyond_close': full_clock['beyond_close'],
+            })
 
-        trade_count = int(trade_sample.get('trade_count', 0) or 0)
-        observed_seconds = float(flow_sample.get('elapsed_seconds', 0) or 0)
+        # 头条预测选行：优先最短且成交样本 ≥3、净消耗 >0 的窗口；
+        # 否则最短的可出预测窗口；都不行时用最长窗口兜底展示原因
+        selected = next(
+            (row for row in window_rows if row['trade_count'] >= 3 and row['net_queue_rate'] > 0),
+            None,
+        )
+        if selected is None:
+            selected = next((row for row in window_rows if row['available']), None)
+        if selected is None:
+            selected = window_rows[-1]
+        selected['selected'] = True
+
+        price_active = rank == 1
+        warnings = []
+        if not selected['available'] and selected['reason']:
+            warnings.append(selected['reason'])
+
+        trade_count = selected['trade_count']
+        observed_seconds = float(selected['elapsed_seconds'] or 0)
         if trade_count >= 10 and observed_seconds >= 15:
             confidence = 'high'
-        elif trade_count >= 3 or (trade_count > 0 and depletion_rate > 0):
+            confidence_reasons = [
+                f'最优价成交笔数 {trade_count} 笔（高可信度需 ≥10 笔）',
+                f'流量观察时长 {observed_seconds:.0f} 秒（高可信度需 ≥15 秒）',
+            ]
+        elif trade_count >= 3 or (trade_count > 0 and selected['depletion_rate'] > 0):
             confidence = 'medium'
+            confidence_reasons = [
+                f'最优价成交笔数 {trade_count} 笔（高可信度需 ≥10 笔）',
+                f'流量观察时长 {observed_seconds:.0f} 秒（高可信度需 ≥15 秒）',
+            ]
         else:
             confidence = 'low'
-        if not price_active and confidence == 'high':
-            confidence = 'medium'
+            confidence_reasons = [
+                f'最优价成交笔数仅 {trade_count} 笔（中可信度需 ≥3 笔，高需 ≥10 笔）',
+                f'窗口内队列消耗 {selected["depleted_volume"]:.0f} 手，样本不足',
+            ]
+        if not selected['available'] and selected['reason']:
+            confidence_reasons.append(selected['reason'])
 
-        first_clock = self._add_trading_wait(time_str, first_wait)
-        full_clock = self._add_trading_wait(time_str, full_wait)
         return {
             'success': True,
             'order': summary,
@@ -1017,32 +1099,35 @@ class TradeBook:
                 'ahead_total_volume': ahead_total,
             },
             'prediction': {
-                'available': first_wait is not None,
+                'available': selected['available'],
                 'lookahead_safe': True,
                 'confidence': confidence,
+                'confidence_reasons': confidence_reasons,
                 'price_active': price_active,
                 'has_filled_as_of': has_filled_as_of,
                 'filled_volume_as_of': filled_volume_as_of,
-                'first_fill_wait_ms': round(first_wait * 1000) if first_wait is not None else None,
-                'full_fill_wait_ms': round(full_wait * 1000) if full_wait is not None else None,
-                'first_fill_time': first_clock['time'],
-                'full_fill_time': full_clock['time'],
-                'first_fill_beyond_close': first_clock['beyond_close'],
-                'full_fill_beyond_close': full_clock['beyond_close'],
-                'queue_depletion_rate': depletion_rate,
-                'level1_arrival_rate': arrival_rate,
-                'net_queue_rate': net_queue_rate,
-                'same_price_trade_rate': trade_rate,
+                'first_fill_wait_ms': selected['first_fill_wait_ms'],
+                'full_fill_wait_ms': selected['full_fill_wait_ms'],
+                'first_fill_time': selected['first_fill_time'],
+                'full_fill_time': selected['full_fill_time'],
+                'first_fill_beyond_close': selected['first_fill_beyond_close'],
+                'full_fill_beyond_close': selected['full_fill_beyond_close'],
+                'queue_depletion_rate': selected['depletion_rate'],
+                'level1_arrival_rate': selected['arrival_rate'],
+                'net_queue_rate': selected['net_queue_rate'],
+                'same_price_trade_rate': selected['trade_rate'],
+                'selected_window_ms': selected['window_ms'],
+                'windows': window_rows,
                 'warnings': warnings,
                 'basis': {
-                    'queue_window_ms': flow_sample['actual_window_ms'],
+                    'queue_window_ms': selected['actual_window_ms'],
                     'queue_observed_seconds': observed_seconds,
-                    'queue_depleted_volume': flow_sample.get('depleted_volume', 0),
-                    'queue_arrived_volume': flow_sample.get('arrived_volume', 0),
-                    'trade_window_ms': trade_sample['actual_window_ms'],
+                    'queue_depleted_volume': selected['depleted_volume'],
+                    'queue_arrived_volume': selected['arrived_volume'],
+                    'trade_window_ms': selected['actual_window_ms'],
                     'trade_count': trade_count,
-                    'trade_volume': trade_sample.get('trade_volume', 0),
-                    'average_trade_size': trade_sample.get('average_trade_size', 0),
+                    'trade_volume': selected['trade_volume'],
+                    'average_trade_size': selected['average_trade_size'],
                 },
             },
         }

@@ -335,16 +335,38 @@
               <div><span>预测时点</span><b>{{ formatExecutionTime(executionEstimateData.as_of_time) }}</b></div>
             </div>
 
+            <!-- 与窗口无关的不变量信息，统一置顶 -->
+            <div v-if="executionEstimateData.current_queue" class="estimate-detail-grid">
+              <div><span>当前档位</span><b>{{ executionEstimateData.current_queue.level || '--' }}</b></div>
+              <div>
+                <span>身前总量（含更高档位）</span>
+                <b>{{ formatEstimateVolume(executionEstimateData.current_queue.ahead_total_volume ?? executionEstimateData.current_queue.ahead_volume) }} 手</b>
+              </div>
+              <div><span>其中更高档位量</span><b>{{ formatEstimateVolume(executionEstimateData.current_queue.higher_levels_volume) }} 手</b></div>
+              <div><span>本单剩余量</span><b>{{ formatEstimateVolume(executionEstimateData.current_queue.remaining_volume) }} 手</b></div>
+              <div><span>截至当前已成交</span><b>{{ formatEstimateVolume(executionEstimateData.prediction?.filled_volume_as_of) }} 手</b></div>
+              <div><span>价格状态</span><b>{{ executionEstimateData.prediction?.price_active ? '当前最优价' : '当前非最优价' }}</b></div>
+            </div>
+
             <section class="estimate-section prediction-section">
               <div class="estimate-section-title">
                 <span>预测成交时间</span>
-                <span
-                  v-if="executionEstimateData.prediction?.confidence"
-                  class="confidence-badge"
-                  :class="'confidence-' + executionEstimateData.prediction.confidence"
-                >
-                  可信度 {{ confidenceLabels[executionEstimateData.prediction.confidence] || '--' }}
-                </span>
+                <Tooltip placement="left">
+                  <template #title>
+                    <div class="confidence-reasons">
+                      <div v-for="reason in executionEstimateData.prediction?.confidence_reasons || []" :key="reason">
+                        · {{ reason }}
+                      </div>
+                    </div>
+                  </template>
+                  <span
+                    v-if="executionEstimateData.prediction?.confidence"
+                    class="confidence-badge"
+                    :class="'confidence-' + executionEstimateData.prediction.confidence"
+                  >
+                    可信度 {{ confidenceLabels[executionEstimateData.prediction.confidence] || '--' }}
+                  </span>
+                </Tooltip>
               </div>
 
               <div v-if="executionEstimateData.prediction?.available" class="estimate-time-grid">
@@ -391,31 +413,55 @@
                 {{ executionEstimateData.prediction?.reason || executionEstimateData.prediction?.warnings?.[0] || '当前样本不足，无法预测' }}
               </div>
 
-              <div v-if="executionEstimateData.current_queue" class="estimate-detail-grid">
-                <div><span>当前档位</span><b>{{ executionEstimateData.current_queue.level || '--' }}</b></div>
-                <div>
-                  <span>身前总量（含更高档位）</span>
-                  <b>{{ formatEstimateVolume(executionEstimateData.current_queue.ahead_total_volume ?? executionEstimateData.current_queue.ahead_volume) }} 手</b>
+              <!-- 逐窗口统计表：各窗口独立计算速率并给出预测，高亮行=头条预测所用窗口 -->
+              <div v-if="executionEstimateData.prediction?.windows?.length" class="estimate-windows">
+                <div class="estimate-windows-title">
+                  分窗口统计（消耗/新增为{{ estimateSideLabel }}1口径<template v-if="hasSecondLevelNet">，{{ estimateSideLabel }}2净={{ estimateSideLabel }}2撤单−{{ estimateSideLabel }}2新增</template>；高亮行为上方预测所用窗口，速率为 手/秒）
                 </div>
-                <div><span>其中更高档位量</span><b>{{ formatEstimateVolume(executionEstimateData.current_queue.higher_levels_volume) }} 手</b></div>
-                <div><span>本单剩余量</span><b>{{ formatEstimateVolume(executionEstimateData.current_queue.remaining_volume) }} 手</b></div>
-                <div><span>截至当前已成交</span><b>{{ formatEstimateVolume(executionEstimateData.prediction?.filled_volume_as_of) }} 手</b></div>
-                <div><span>价格状态</span><b>{{ executionEstimateData.prediction?.price_active ? '当前最优价' : '当前非最优价' }}</b></div>
-                <div><span>{{ estimateSideLabel }}1队列消耗速度</span><b>{{ formatEstimateRate(executionEstimateData.prediction?.queue_depletion_rate) }}</b></div>
-                <div><span>{{ estimateSideLabel }}1新增挂单速度</span><b>{{ formatEstimateRate(executionEstimateData.prediction?.level1_arrival_rate) }}</b></div>
-                <div><span>净消耗速度</span><b>{{ formatEstimateRate(executionEstimateData.prediction?.net_queue_rate) }}</b></div>
-                <div><span>{{ estimateSideLabel }}1价成交速度</span><b>{{ formatEstimateRate(executionEstimateData.prediction?.same_price_trade_rate) }}</b></div>
-              </div>
-
-              <div v-if="executionEstimateData.prediction?.basis" class="estimate-basis">
-                统计依据：{{ estimateSideLabel }}1流量窗口
-                {{ formatEstimateWindow(executionEstimateData.prediction.basis.queue_window_ms) }}
-                （观察 {{ Number(executionEstimateData.prediction.basis.queue_observed_seconds || 0).toFixed(1) }} 秒，
-                消耗 {{ formatEstimateVolume(executionEstimateData.prediction.basis.queue_depleted_volume) }} 手，
-                新增挂单 {{ formatEstimateVolume(executionEstimateData.prediction.basis.queue_arrived_volume) }} 手）；
-                {{ estimateSideLabel }}1价成交窗口 {{ formatEstimateWindow(executionEstimateData.prediction.basis.trade_window_ms) }}
-                （{{ executionEstimateData.prediction.basis.trade_count || 0 }} 笔，
-                {{ formatEstimateVolume(executionEstimateData.prediction.basis.trade_volume) }} 手）。
+                <table class="estimate-window-table">
+                  <thead>
+                    <tr>
+                      <th>时间窗口</th>
+                      <th>消耗速度</th>
+                      <th>新增挂单</th>
+                      <th v-if="hasSecondLevelNet">{{ estimateSideLabel }}2净速度</th>
+                      <th>净消耗速度</th>
+                      <th>成交速度</th>
+                      <th>预计首次成交</th>
+                      <th>预计全部成交</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr
+                      v-for="row in executionEstimateData.prediction.windows"
+                      :key="row.window_ms"
+                      :class="{ 'row-selected': row.selected }"
+                    >
+                      <td>{{ formatEstimateWindow(row.actual_window_ms) }}</td>
+                      <td>{{ formatWindowRate(row.depletion_rate) }}</td>
+                      <td>{{ formatWindowRate(row.arrival_rate) }}</td>
+                      <td v-if="hasSecondLevelNet">{{ formatWindowRate(row.second_net_rate) }}</td>
+                      <td>{{ formatWindowRate(row.net_queue_rate) }}</td>
+                      <td>{{ formatWindowRate(row.trade_rate) }}</td>
+                      <td>
+                        <Tooltip v-if="!row.available && row.reason" :title="row.reason">
+                          <span class="cell-unavailable">不可估</span>
+                        </Tooltip>
+                        <template v-else>
+                          {{ row.first_fill_beyond_close ? '超过收盘' : formatExecutionTime(row.first_fill_time) }}
+                        </template>
+                      </td>
+                      <td>
+                        <Tooltip v-if="!row.available && row.reason" :title="row.reason">
+                          <span class="cell-unavailable">不可估</span>
+                        </Tooltip>
+                        <template v-else>
+                          {{ row.full_fill_beyond_close ? '超过收盘' : formatExecutionTime(row.full_fill_time) }}
+                        </template>
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
               </div>
               <ul v-if="executionEstimateData.prediction?.warnings?.length" class="estimate-warnings">
                 <li v-for="warning in executionEstimateData.prediction.warnings" :key="warning">{{ warning }}</li>
@@ -2290,6 +2336,20 @@
        return numeric.toLocaleString('zh-CN', { maximumFractionDigits: 2 }) + ' 手/秒';
      };
 
+     // 分窗口表格的速率格式化：0 与负值（队列变长）都是有效信息，不能显示 '--'
+     const formatWindowRate = (value) => {
+       const numeric = Number(value);
+       if (!Number.isFinite(numeric)) return '--';
+       return numeric.toLocaleString('zh-CN', { maximumFractionDigits: 2 });
+     };
+
+     // 仅三档订单的窗口行携带买2/卖2净速度列
+     const hasSecondLevelNet = computed(() =>
+       (executionEstimateData.value?.prediction?.windows || []).some(
+         (row) => row.second_net_rate !== null && row.second_net_rate !== undefined,
+       ),
+     );
+
      const formatEstimateWindow = (value) => {
        const ms = Number(value);
        if (!Number.isFinite(ms) || ms <= 0) return '--';
@@ -3945,6 +4005,69 @@
     border-radius: 10px;
     font-size: 11px;
     font-weight: 500;
+    cursor: help;
+  }
+
+  .estimate-windows {
+    margin-top: 10px;
+  }
+
+  .estimate-windows-title {
+    margin-bottom: 5px;
+    color: #667085;
+    font-size: 11px;
+  }
+
+  .estimate-window-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+
+    th,
+    td {
+      padding: 4px 8px;
+      border-bottom: 1px solid #e6eef8;
+      text-align: center;
+      white-space: nowrap;
+    }
+
+    th {
+      color: #667085;
+      font-weight: 600;
+      background: #fff;
+    }
+
+    td {
+      color: #1d2939;
+    }
+
+    .row-selected td {
+      background: #e6f4ff;
+      font-weight: 600;
+    }
+
+    .cell-unavailable {
+      color: #b54708;
+      cursor: help;
+      text-decoration: underline dotted;
+    }
+  }
+
+  .estimate-warnings {
+    margin: 8px 0 0;
+    padding-left: 20px;
+    color: #b54708;
+    font-size: 11px;
+  }
+
+  .estimate-footnote {
+    margin-top: 10px;
+    padding: 6px 12px 2px;
+    border-left: 3px solid #d1e9ff;
+    color: #667085;
+    font-size: 11px;
+    line-height: 1.5;
   }
 
   .confidence-high {
@@ -3996,32 +4119,9 @@
 
   .estimate-detail-grid {
     display: grid;
-    grid-template-columns: repeat(5, minmax(0, 1fr));
+    grid-template-columns: repeat(6, minmax(0, 1fr));
     gap: 7px;
-  }
-
-  .estimate-basis {
-    margin-top: 10px;
-    padding: 8px 10px;
-    border-radius: 5px;
-    color: #475467;
-    font-size: 11px;
-    line-height: 1.6;
-    background: rgb(255 255 255 / 70%);
-  }
-
-  .estimate-warnings {
-    margin: 8px 0 0;
-    padding-left: 20px;
-    color: #b54708;
-    font-size: 11px;
-  }
-
-  .estimate-footnote {
-    margin-top: 10px;
-    color: #667085;
-    font-size: 11px;
-    line-height: 1.5;
+    margin-bottom: 4px;
   }
 
   @media (max-width: 960px) {
