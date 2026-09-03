@@ -1,23 +1,33 @@
 <template>
-  <AutoComplete
-    v-model:value="text"
-    class="time-step-select"
-    :options="autoOptions"
-    :placeholder="placeholder"
-    :allow-clear="false"
-    @select="handleCommit"
-    @blur="handleBlur"
-    @keydown.enter="handleCommit(text)"
-  />
+  <Tooltip
+    :open="invalid"
+    title="输入非法：请输入 数字+单位（ms / s / min），如 200ms、5s、1min"
+    placement="bottom"
+    color="#ff4d4f"
+  >
+    <AutoComplete
+      v-model:value="text"
+      class="time-step-select"
+      :class="{ 'input-invalid': invalid }"
+      :options="autoOptions"
+      :placeholder="placeholder"
+      :allow-clear="false"
+      @select="handleCommit"
+      @blur="handleBlur"
+      @keydown.enter="handleCommit(text)"
+    />
+  </Tooltip>
 </template>
 
 <script lang="js" setup>
   import { ref, computed, watch } from 'vue';
-  import { AutoComplete } from 'ant-design-vue';
+  import { AutoComplete, Tooltip } from 'ant-design-vue';
 
   /**
    * 时间步长选择器：下拉选项 + 自由输入「数字+单位（ms/s/min）」。
-   * 值以毫秒数为唯一口径（v-model:value），输入非法时回退到上一个有效值。
+   * 值以毫秒数为唯一口径（v-model:value）。
+   * 输入非法时：不跳转、输入内容保持不变，旁边弹出报错提示；
+   * 用户重新输入或 3 秒后提示自动消失。
    */
   const props = defineProps({
     value: { type: Number, default: 30 },
@@ -46,6 +56,22 @@
   };
 
   const text = ref(formatMs(props.value));
+  const invalid = ref(false);
+  let invalidTimer = null;
+
+  const showInvalid = () => {
+    invalid.value = true;
+    clearTimeout(invalidTimer);
+    invalidTimer = setTimeout(() => {
+      invalid.value = false;
+    }, 3000);
+  };
+
+  // 用户重新输入时立即清除报错状态
+  watch(text, () => {
+    invalid.value = false;
+    clearTimeout(invalidTimer);
+  });
 
   // 外部值变化（如初始化/重置）时同步显示文本
   watch(
@@ -62,9 +88,11 @@
   const handleCommit = (raw) => {
     const ms = parseText(raw);
     if (ms === null) {
-      text.value = formatMs(props.value);
+      // 非法输入：不改动生效值、不回写输入框，只弹报错提示
+      showInvalid();
       return;
     }
+    invalid.value = false;
     text.value = formatMs(ms);
     if (ms !== props.value) {
       emit('update:value', ms);
@@ -78,5 +106,9 @@
 <style lang="less" scoped>
   .time-step-select {
     width: 88px;
+
+    &.input-invalid :deep(.ant-select-selector) {
+      border-color: #ff4d4f !important;
+    }
   }
 </style>
