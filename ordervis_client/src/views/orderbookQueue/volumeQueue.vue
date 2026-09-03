@@ -46,6 +46,7 @@
             <Spin v-if="loading" size="small" style="margin-right: 8px" />
             {{ loading ? '加载中...' : '开始' }}
           </Button>
+          <GlobalOrderSearch class="ov-global-search" />
         </div>
         <div class="ov-bar-status">
           <span class="status-item">
@@ -97,6 +98,9 @@
           <span class="status-item theme-toggle">
             暗色
             <Switch v-model:checked="darkMode" size="small" />
+          </span>
+          <span class="status-item ov-user-dropdown">
+            <UserDropDown />
           </span>
         </div>
       </div>
@@ -519,6 +523,9 @@
     import LockedOrderChart from './components/LockedOrderChart.vue'
     import TimeStepSelect from './components/TimeStepSelect.vue'
     import SummaryTables from './components/SummaryTables.vue'
+    // 顶部布局 header 移除后迁入：订单查询跳转（开始按钮右侧）、登录状态（暗色开关右侧）
+    import GlobalOrderSearch from '/@/layouts/default/header/components/GlobalOrderSearch.vue'
+    import UserDropDown from '/@/layouts/default/header/components/user-dropdown/index.vue'
     import { useSnapshotNavigation } from './composables/useSnapshotNavigation';
     import { useMessage } from '/@/hooks/web/useMessage';
     import { createProgressListener } from '/@/utils/websocket';
@@ -3430,6 +3437,39 @@
       display: inline-flex;
       align-items: center;
       gap: 6px;
+    }
+
+    .ov-user-dropdown {
+      display: inline-flex;
+      align-items: center;
+
+      // 迁入顶栏后去掉 header 固定高度，与状态文字对齐
+      :deep(.vben-header-user-dropdown) {
+        height: auto;
+        padding: 0 4px;
+
+        img {
+          margin-right: 6px;
+        }
+      }
+    }
+  }
+
+  // 迁入顶栏的订单查询按钮：压缩为与顶栏一致的控件高度
+  .ov-global-search {
+    display: inline-flex;
+    align-items: center;
+
+    :deep(.search-trigger-button) {
+      min-height: 32px;
+      height: 32px;
+      padding: 0 10px;
+      font-size: 12px;
+
+      &:hover {
+        transform: none;
+        box-shadow: none;
+      }
     }
   }
 

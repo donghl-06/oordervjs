@@ -2,7 +2,7 @@
   <Layout :class="layoutClass">
     <LayoutSideBar v-if="getShowSidebar" />
     <Layout :class="[prefixCls, `${prefixCls}__content-layout`]">
-      <LayoutHeader v-if="getShowHeader" :fixed="getFixedHeader" />
+      <!-- 顶部 header 已按需求移除：订单搜索迁入业务页顶栏，登录状态迁入暗色开关右侧 -->
       <LayoutContent />
     </Layout>
   </Layout>
@@ -14,11 +14,9 @@
   import { createAsyncComponent } from '/@/utils/factory/createAsyncComponent';
 
   import LayoutSideBar from './sider/index.vue';
-  import LayoutHeader from './header/index.vue';
   import LayoutContent from './content/index.vue';
 
   import { useMenuSetting } from '/@/hooks/setting/useMenuSetting';
-  import { useHeaderSetting } from '/@/hooks/setting/useHeaderSetting';
   import { useDesign } from '/@/hooks/web/useDesign';
 
   export default defineComponent({
@@ -26,13 +24,11 @@
     components: {
       Layout,
       LayoutSideBar,
-      LayoutHeader,
       LayoutContent,
     },
     setup() {
       const { prefixCls } = useDesign('default-layout');
       const { getShowSidebar } = useMenuSetting();
-      const { getShowHeader, getFixedHeader } = useHeaderSetting();
 
       const layoutClass = computed(() => {
         return [
@@ -47,8 +43,6 @@
         prefixCls,
         layoutClass,
         getShowSidebar,
-        getShowHeader,
-        getFixedHeader,
       };
     },
   });
