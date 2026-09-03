@@ -1112,10 +1112,11 @@
     // ==================== 第 4 步：布局与视觉重构新增状态 ====================
 
     // A1 步进颗粒度选择器（预设为毫秒数，支持输入「数字+ms/s/min」自定义）
+    // 小步上限 500ms、大步入门 1s，两档预设不重叠
     const smallStepMs = ref(30);
-    const smallStepOptions = [5, 10, 30, 50, 100, 200, 500, 1000];
+    const smallStepOptions = [5, 10, 30, 50, 100, 200, 500];
     const bigStepMs = ref(1000);
-    const bigStepOptions = [500, 1000, 3000, 5000, 10000, 30000, 60000, 300000];
+    const bigStepOptions = [1000, 3000, 5000, 10000, 30000, 60000, 300000];
     const orderStep = ref(1);
     const orderStepOptions = [
       { value: 1, label: '±1 订单' },
