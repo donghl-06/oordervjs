@@ -271,7 +271,7 @@
       </div>
 
       <!-- ③ 右侧图表区：盘口统计表 + Q-t 窗口图 + 锁定订单图 -->
-      <!-- 未锁定订单时 Q-t 图撑满右栏；锁定后统计表与 Q-t 图固定置顶，锁定订单图占剩余空间 -->
+      <!-- 统计表与 Q-t 图固定置顶；锁定订单图出现时占右栏剩余空间、卡内滚动 -->
       <div class="ov-chart-area" :class="{ 'has-locked': lockedOrderIds.length > 0 }">
         <SummaryTables :level-data="levelData" :trade-data="tradeData" />
         <TradeFlowChart
@@ -3513,15 +3513,9 @@
     flex-direction: column;
     gap: 8px;
 
-    // 统计表/Q-t 图固定置顶，不被锁定订单图挤出首屏
+    // 统计表/Q-t 图固定置顶，不被锁定订单图挤出首屏；Q-t 图保持固定紧凑高度
     > .chart-card {
       flex: 0 0 auto;
-    }
-
-    // 未锁定：Q-t 图撑满右栏剩余高度
-    &:not(.has-locked) > .flow-card {
-      flex: 1 1 auto;
-      min-height: 0;
     }
 
     // 已锁定：锁定订单图占剩余空间，内容超出时卡内滚动

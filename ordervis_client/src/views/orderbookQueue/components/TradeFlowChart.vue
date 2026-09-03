@@ -420,15 +420,4 @@
     width: 100%;
     height: 160px;
   }
-
-  // 未锁定订单时（父级 ov-chart-area 无 has-locked），本卡撑满右栏剩余高度
-  .ov-chart-area:not(.has-locked) > .chart-card {
-    min-height: 0;
-
-    .flow-chart {
-      flex: 1;
-      height: auto;
-      min-height: 160px;
-    }
-  }
 </style>
