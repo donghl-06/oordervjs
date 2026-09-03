@@ -358,12 +358,21 @@
             <section class="estimate-section prediction-section">
               <div class="estimate-section-title">
                 <span>预测成交时间</span>
-                <Tooltip placement="left">
+                <Tooltip placement="left" overlay-class-name="confidence-tip-overlay">
                   <template #title>
                     <div class="confidence-reasons">
-                      <div v-for="reason in executionEstimateData.prediction?.confidence_reasons || []" :key="reason">
-                        · {{ reason }}
-                      </div>
+                      <div>高：总分 ≥ 70 分</div>
+                      <div>中：40 ≤ 总分 &lt; 70 分</div>
+                      <div>低：总分 &lt; 40 分</div>
+                      <template v-if="!executionEstimateData.prediction?.available">
+                        <div
+                          v-for="reason in executionEstimateData.prediction?.confidence_reasons || []"
+                          :key="reason"
+                          class="confidence-reason-note"
+                        >
+                          · {{ reason }}
+                        </div>
+                      </template>
                     </div>
                   </template>
                   <span
@@ -4279,10 +4288,15 @@
 <style lang="less">
   .score-tip-overlay {
     .ant-tooltip-inner {
+      width: 560px;
+      max-width: calc(100vw - 32px);
+      box-sizing: border-box;
       padding: 8px 10px;
+      overflow: hidden;
     }
 
     .score-tip-table {
+      width: 100%;
       border-collapse: collapse;
       font-size: 12px;
       font-variant-numeric: tabular-nums;
@@ -4301,6 +4315,27 @@
         font-weight: 600;
         text-align: right;
       }
+    }
+  }
+
+  .confidence-tip-overlay {
+    .ant-tooltip-inner {
+      min-width: 260px;
+      max-width: min(560px, calc(100vw - 32px));
+      padding: 9px 12px;
+      box-sizing: border-box;
+    }
+
+    .confidence-reasons {
+      line-height: 1.7;
+      white-space: nowrap;
+    }
+
+    .confidence-reason-note {
+      margin-top: 4px;
+      padding-top: 4px;
+      border-top: 1px solid rgba(255, 255, 255, 0.2);
+      white-space: normal;
     }
   }
 </style>
