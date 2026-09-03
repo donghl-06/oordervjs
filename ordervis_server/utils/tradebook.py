@@ -727,70 +727,68 @@ class TradeBook:
         afternoon_start = 13 * 3600000
         return afternoon_start if time_ms >= afternoon_start else CONTINUOUS_AUCTION_START_MS
 
-    def _queue_depletion_sample(
+    def _best_level_flow_sample(
         self,
-        order_id: int,
+        side: str,
         end_ms: int,
         window_ms: int,
-        create_ms: int,
     ) -> Dict[str, Any]:
-        """估计订单身前队列消耗速度；身前撤单和成交都会计入有效消耗。"""
+        """
+        买1/卖1档流量采样：消耗速度 = 该档等待量减少速度（成交+撤单合计），
+        新增速度 = 该档新挂单速度。
+        引擎计数器是跟随最优档的累计值（实测 Δ一档量 = Δcreate − Δtraded 与
+        快照逐点一致），因此只需窗口两端各查一次 query_market_data（0.013ms/次）。
+        窗口不按订单创建时刻截断：档位流量描述的是队列本身，与订单何时挂出无关。
+        side: 'bid' 或 'ask'
+        """
         start_ms = max(
             end_ms - window_ms,
             self._session_start_for_time(end_ms),
-            create_ms,
         )
         duration_ms = max(0, end_ms - start_ms)
         if duration_ms <= 0:
             return {
                 'window_ms': window_ms,
                 'actual_window_ms': 0,
-                'rate': 0.0,
+                'elapsed_seconds': 0.0,
                 'depleted_volume': 0.0,
-                'observed_seconds': 0.0,
-                'valid_samples': 0,
+                'arrived_volume': 0.0,
+                'depletion_rate': 0.0,
+                'arrival_rate': 0.0,
             }
 
-        points = max(6, min(60, int(duration_ms / 500)))
-        step = duration_ms / points
-        weighted_depletion = 0.0
-        weighted_seconds = 0.0
-        raw_depletion = 0.0
-        observed_seconds = 0.0
-        valid_samples = 0
-        previous = None
-        half_life_seconds = max(5.0, duration_ms / 3000)
+        create_key = f'{side}_create_count'
+        traded_key = f'{side}_traded_count'
+        md_start = (
+            self.visualizer.query_market_data(self.date, _ms_to_time(start_ms)) or {}
+        ).get('market_data') or {}
+        md_end = (
+            self.visualizer.query_market_data(self.date, _ms_to_time(end_ms)) or {}
+        ).get('market_data') or {}
 
-        for index in range(points + 1):
-            sample_ms = round(start_ms + index * step)
-            position = self._queue_position_at(_ms_to_time(sample_ms), order_id)
-            if position is None:
-                previous = None
-                continue
-
-            valid_samples += 1
-            current_ahead = float(position.get('ahead_volume', 0) or 0)
-            if previous is not None:
-                previous_ms, previous_ahead = previous
-                elapsed_seconds = max(0.0, (sample_ms - previous_ms) / 1000)
-                if elapsed_seconds > 0:
-                    depletion = max(0.0, previous_ahead - current_ahead)
-                    age_seconds = max(0.0, (end_ms - sample_ms) / 1000)
-                    weight = 0.5 ** (age_seconds / half_life_seconds)
-                    weighted_depletion += depletion * weight
-                    weighted_seconds += elapsed_seconds * weight
-                    raw_depletion += depletion
-                    observed_seconds += elapsed_seconds
-            previous = (sample_ms, current_ahead)
-
+        elapsed_seconds = duration_ms / 1000
+        depleted = max(0.0, float((md_end.get(traded_key) or 0) - (md_start.get(traded_key) or 0)))
+        arrived = max(0.0, float((md_end.get(create_key) or 0) - (md_start.get(create_key) or 0)))
         return {
             'window_ms': window_ms,
             'actual_window_ms': duration_ms,
-            'rate': weighted_depletion / weighted_seconds if weighted_seconds > 0 else 0.0,
-            'depleted_volume': raw_depletion,
-            'observed_seconds': observed_seconds,
-            'valid_samples': valid_samples,
+            'elapsed_seconds': elapsed_seconds,
+            'depleted_volume': depleted,
+            'arrived_volume': arrived,
+            'depletion_rate': depleted / elapsed_seconds,
+            'arrival_rate': arrived / elapsed_seconds,
         }
+
+    @staticmethod
+    def _select_flow_sample(samples: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """优先选最短且观察到真实消耗的窗口；都无效时用最长窗口。"""
+        for sample in samples:
+            if sample['elapsed_seconds'] >= 10 and sample['depleted_volume'] > 0:
+                return sample
+        for sample in samples:
+            if sample['elapsed_seconds'] >= 10:
+                return sample
+        return samples[-1]
 
     def _same_price_trade_sample(
         self,
@@ -826,13 +824,6 @@ class TradeBook:
                     return sample
             for sample in reversed(samples):
                 if sample['trade_count'] > 0:
-                    return sample
-        else:
-            for sample in samples:
-                if sample['rate'] > 0 and sample['observed_seconds'] >= 5:
-                    return sample
-            for sample in reversed(samples):
-                if sample['valid_samples'] >= 2:
                     return sample
         return samples[-1]
 
@@ -914,31 +905,79 @@ class TradeBook:
                 },
             }
 
+        # 身前总量 = 所有交易优先级更高档位的等待总量 + 本档位身前量
+        # （买2 身前总量 = 买1总量 + 买2档内身前量；买3 再加买2总量，卖侧同理）
+        level_key = str(current_position.get('level') or '')
+        level_rank = {'bid1': 1, 'bid2': 2, 'bid3': 3, 'ask1': 1, 'ask2': 2, 'ask3': 3}
+        rank = level_rank.get(level_key)
+        if rank is None:
+            return {
+                'success': True,
+                'order': summary,
+                'as_of_time': time_str,
+                'actual': actual,
+                'prediction': {
+                    'available': False,
+                    'reason': f'无法识别订单当前档位 {level_key}',
+                    'lookahead_safe': True,
+                },
+            }
+        side_key = 'bid' if level_key.startswith('bid') else 'ask'
+        side_sign = 1 if side_key == 'bid' else -1
+        side_label = '买' if side_key == 'bid' else '卖'
+
+        snap = self.visualizer.query_by_time(self.date, time_str) or {}
+        levels = snap.get('levels') or {}
+        higher_levels_volume = 0.0
+        for r in range(1, rank):
+            higher = levels.get(f'{side_key}{r}') or {}
+            higher_levels_volume += float(higher.get('total_volume') or 0)
+        own_ahead = float(current_position.get('ahead_volume', 0) or 0)
+        ahead_total = higher_levels_volume + own_ahead
+        remaining_volume = float(current_position.get('remaining_volume', 0) or 0)
+
+        # 最优档价格（快照 price 为 ×10000 整数），成交速度按该档成交价统计
+        best_level = levels.get(f'{side_key}1') or {}
+        best_price_raw = best_level.get('price')
+        best_price = float(best_price_raw) / 10000 if best_price_raw is not None else meta['price']
+
         candidate_windows = [30000, 120000, 600000]
-        queue_samples = [
-            self._queue_depletion_sample(order_id, end_ms, window, meta['time_ms'])
+        flow_samples = [
+            self._best_level_flow_sample(side_key, end_ms, window)
             for window in candidate_windows
         ]
         trade_samples = [
-            self._same_price_trade_sample(meta['side'], meta['price'], end_ms, window)
+            self._same_price_trade_sample(side_sign, best_price, end_ms, window)
             for window in candidate_windows
         ]
-        queue_sample = self._select_adaptive_sample(queue_samples, 'queue')
+        flow_sample = self._select_flow_sample(flow_samples)
         trade_sample = self._select_adaptive_sample(trade_samples, 'trade')
 
-        ahead_volume = float(current_position.get('ahead_volume', 0) or 0)
-        remaining_volume = float(current_position.get('remaining_volume', 0) or 0)
-        queue_rate = float(queue_sample.get('rate', 0) or 0)
+        depletion_rate = float(flow_sample.get('depletion_rate', 0) or 0)
+        arrival_rate = float(flow_sample.get('arrival_rate', 0) or 0)
         trade_rate = float(trade_sample.get('rate', 0) or 0)
-        effective_queue_rate = queue_rate if queue_rate > 0 else trade_rate
+        # 买1档订单：新挂单排在其身后，不影响等待，净速度 = 消耗速度；
+        # 买2/买3档：更高档位的新挂单会插到身前，净速度 = 消耗速度 − 新增挂单速度
+        net_queue_rate = depletion_rate if rank == 1 else depletion_rate - arrival_rate
+        price_active = rank == 1
         warnings = []
 
         if trade_rate <= 0:
             first_wait = None
             full_wait = None
-            warnings.append('统计窗口内没有可识别的同价位成交，暂时无法给出成交时间')
+            queue_wait = None
+            warnings.append(f'统计窗口内没有可识别的{side_label}1价成交，暂时无法给出成交时间')
         else:
-            queue_wait = ahead_volume / effective_queue_rate if effective_queue_rate > 0 else None
+            if net_queue_rate > 0:
+                queue_wait = ahead_total / net_queue_rate
+            elif rank > 1 and arrival_rate > 0:
+                queue_wait = None
+                warnings.append(
+                    f'{side_label}1新增挂单速度不低于消耗速度，身前队列预计不会缩短，无法给出排队时间'
+                )
+            else:
+                queue_wait = None
+                warnings.append(f'近期未观察到{side_label}1队列消耗，暂时无法估算排队时间')
             if queue_wait is None:
                 first_wait = None
                 full_wait = None
@@ -948,18 +987,17 @@ class TradeBook:
                 first_wait = queue_wait + typical_fill / trade_rate
                 full_wait = queue_wait + remaining_volume / trade_rate
 
-        level_key = str(current_position.get('level') or '')
-        price_active = level_key in ('bid1', 'ask1')
         if not price_active:
-            warnings.append('订单当前不在最优价，预测已包含近期无成交时段，但未单独预测价格何时到达该档位')
-        if queue_rate <= 0:
-            warnings.append('近期未观察到身前量下降，身前等待部分使用同价位成交速度估算')
+            warnings.append(
+                f'订单当前不在最优价，身前总量已包含更高档位全部等待量，'
+                f'统一按{side_label}1消耗/新增速度估算，未单独预测价格何时到达该档位'
+            )
 
         trade_count = int(trade_sample.get('trade_count', 0) or 0)
-        observed_seconds = float(queue_sample.get('observed_seconds', 0) or 0)
+        observed_seconds = float(flow_sample.get('elapsed_seconds', 0) or 0)
         if trade_count >= 10 and observed_seconds >= 15:
             confidence = 'high'
-        elif trade_count >= 3 or (trade_count > 0 and queue_rate > 0):
+        elif trade_count >= 3 or (trade_count > 0 and depletion_rate > 0):
             confidence = 'medium'
         else:
             confidence = 'low'
@@ -973,7 +1011,11 @@ class TradeBook:
             'order': summary,
             'as_of_time': time_str,
             'actual': actual,
-            'current_queue': current_position,
+            'current_queue': {
+                **current_position,
+                'higher_levels_volume': higher_levels_volume,
+                'ahead_total_volume': ahead_total,
+            },
             'prediction': {
                 'available': first_wait is not None,
                 'lookahead_safe': True,
@@ -987,13 +1029,16 @@ class TradeBook:
                 'full_fill_time': full_clock['time'],
                 'first_fill_beyond_close': first_clock['beyond_close'],
                 'full_fill_beyond_close': full_clock['beyond_close'],
-                'queue_depletion_rate': queue_rate,
+                'queue_depletion_rate': depletion_rate,
+                'level1_arrival_rate': arrival_rate,
+                'net_queue_rate': net_queue_rate,
                 'same_price_trade_rate': trade_rate,
                 'warnings': warnings,
                 'basis': {
-                    'queue_window_ms': queue_sample['actual_window_ms'],
+                    'queue_window_ms': flow_sample['actual_window_ms'],
                     'queue_observed_seconds': observed_seconds,
-                    'queue_depleted_volume': queue_sample.get('depleted_volume', 0),
+                    'queue_depleted_volume': flow_sample.get('depleted_volume', 0),
+                    'queue_arrived_volume': flow_sample.get('arrived_volume', 0),
                     'trade_window_ms': trade_sample['actual_window_ms'],
                     'trade_count': trade_count,
                     'trade_volume': trade_sample.get('trade_volume', 0),

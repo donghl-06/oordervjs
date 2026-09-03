@@ -347,10 +347,11 @@
     <Modal
       :visible="executionEstimateVisible"
       :title="executionEstimateTitle"
-      width="760px"
+      width="980px"
       :footer="null"
       centered
       destroy-on-close
+      wrap-class-name="execution-estimate-modal"
       @cancel="closeExecutionEstimate"
       @update:visible="(visible) => { if (!visible) closeExecutionEstimate() }"
     >
@@ -431,20 +432,27 @@
 
               <div v-if="executionEstimateData.current_queue" class="estimate-detail-grid">
                 <div><span>当前档位</span><b>{{ executionEstimateData.current_queue.level || '--' }}</b></div>
-                <div><span>当前身前量</span><b>{{ formatEstimateVolume(executionEstimateData.current_queue.ahead_volume) }} 手</b></div>
+                <div>
+                  <span>身前总量（含更高档位）</span>
+                  <b>{{ formatEstimateVolume(executionEstimateData.current_queue.ahead_total_volume ?? executionEstimateData.current_queue.ahead_volume) }} 手</b>
+                </div>
+                <div><span>其中更高档位量</span><b>{{ formatEstimateVolume(executionEstimateData.current_queue.higher_levels_volume) }} 手</b></div>
                 <div><span>本单剩余量</span><b>{{ formatEstimateVolume(executionEstimateData.current_queue.remaining_volume) }} 手</b></div>
                 <div><span>截至当前已成交</span><b>{{ formatEstimateVolume(executionEstimateData.prediction?.filled_volume_as_of) }} 手</b></div>
                 <div><span>价格状态</span><b>{{ executionEstimateData.prediction?.price_active ? '当前最优价' : '当前非最优价' }}</b></div>
-                <div><span>身前消耗速度</span><b>{{ formatEstimateRate(executionEstimateData.prediction?.queue_depletion_rate) }}</b></div>
-                <div><span>同价成交速度</span><b>{{ formatEstimateRate(executionEstimateData.prediction?.same_price_trade_rate) }}</b></div>
+                <div><span>{{ estimateSideLabel }}1队列消耗速度</span><b>{{ formatEstimateRate(executionEstimateData.prediction?.queue_depletion_rate) }}</b></div>
+                <div><span>{{ estimateSideLabel }}1新增挂单速度</span><b>{{ formatEstimateRate(executionEstimateData.prediction?.level1_arrival_rate) }}</b></div>
+                <div><span>净消耗速度</span><b>{{ formatEstimateRate(executionEstimateData.prediction?.net_queue_rate) }}</b></div>
+                <div><span>{{ estimateSideLabel }}1价成交速度</span><b>{{ formatEstimateRate(executionEstimateData.prediction?.same_price_trade_rate) }}</b></div>
               </div>
 
               <div v-if="executionEstimateData.prediction?.basis" class="estimate-basis">
-                统计依据：身前队列窗口
+                统计依据：{{ estimateSideLabel }}1流量窗口
                 {{ formatEstimateWindow(executionEstimateData.prediction.basis.queue_window_ms) }}
                 （观察 {{ Number(executionEstimateData.prediction.basis.queue_observed_seconds || 0).toFixed(1) }} 秒，
-                消耗 {{ formatEstimateVolume(executionEstimateData.prediction.basis.queue_depleted_volume) }} 手）；
-                同价成交窗口 {{ formatEstimateWindow(executionEstimateData.prediction.basis.trade_window_ms) }}
+                消耗 {{ formatEstimateVolume(executionEstimateData.prediction.basis.queue_depleted_volume) }} 手，
+                新增挂单 {{ formatEstimateVolume(executionEstimateData.prediction.basis.queue_arrived_volume) }} 手）；
+                {{ estimateSideLabel }}1价成交窗口 {{ formatEstimateWindow(executionEstimateData.prediction.basis.trade_window_ms) }}
                 （{{ executionEstimateData.prediction.basis.trade_count || 0 }} 笔，
                 {{ formatEstimateVolume(executionEstimateData.prediction.basis.trade_volume) }} 手）。
               </div>
@@ -2313,6 +2321,11 @@
        return id ? '订单 ' + id + ' 成交时间分析' : '订单成交时间分析';
      });
 
+     // 弹窗内「买1/卖1」标签随订单方向切换
+     const estimateSideLabel = computed(() =>
+       executionEstimateData.value?.order?.side === -1 ? '卖' : '买',
+     );
+
      const formatExecutionTime = (value) => {
        if (!value) return '--';
        return String(value).split(' ').pop() || '--';
@@ -4073,7 +4086,7 @@
 
   .estimate-detail-grid {
     display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-columns: repeat(5, minmax(0, 1fr));
     gap: 7px;
   }
 
@@ -4101,7 +4114,7 @@
     line-height: 1.5;
   }
 
-  @media (max-width: 760px) {
+  @media (max-width: 960px) {
     .estimate-order-summary,
     .estimate-detail-grid {
       grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -4110,6 +4123,11 @@
     .estimate-time-grid {
       grid-template-columns: minmax(0, 1fr);
     }
+  }
+
+  // 弹窗留白：不顶天立地，四周留空隙
+  :deep(.execution-estimate-modal .ant-modal) {
+    max-width: calc(100vw - 64px);
   }
 
 </style>
