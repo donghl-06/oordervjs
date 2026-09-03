@@ -3360,13 +3360,20 @@
     display: flex;
     align-items: center;
     flex-wrap: wrap;
-    gap: 6px 16px;
+    gap: 6px 12px;
     min-height: 36px;
 
+    // 控制条（时间/订单/跳转/锁定）不换行：窄屏横向滚动，避免折行占用纵向空间
     &.controls {
+      flex-wrap: nowrap;
+      overflow-x: auto;
       border-top: 1px dashed #edf1f7;
       padding-top: 6px;
       margin-top: 6px;
+
+      .ov-bar-group {
+        flex: 0 0 auto;
+      }
     }
   }
 
@@ -3397,8 +3404,8 @@
     &.w-step { width: 104px; }
   }
 
-  .ov-time-input { width: 120px; }
-  .ov-lock-input { width: 76px; &.w-id { width: 110px; } }
+  .ov-time-input { width: 104px; }
+  .ov-lock-input { width: 68px; &.w-id { width: 96px; } }
 
   .ov-bar-status {
     display: flex;

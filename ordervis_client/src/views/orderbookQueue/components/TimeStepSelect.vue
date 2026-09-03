@@ -77,6 +77,6 @@
 
 <style lang="less" scoped>
   .time-step-select {
-    width: 96px;
+    width: 88px;
   }
 </style>
