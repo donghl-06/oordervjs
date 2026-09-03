@@ -268,39 +268,11 @@
           </div>
         </div>
 
-        <!-- 汇总指标行：六档总量/单数 + 一档流量 -->
-        <div v-show="!expandedTable" class="ov-summary-strip">
-          <div class="sum-levels">
-            <div
-              v-for="item in levelData"
-              :key="item.level"
-              class="sum-level"
-              :class="item.level.startsWith('买') ? 'bid' : 'ask'"
-            >
-              <span class="sum-level-name">{{ item.level }}</span>
-              <b class="num">{{ formatVol(item.volume) }}</b>
-              <span class="sum-level-count">{{ item.number || '--' }}单</span>
-            </div>
-          </div>
-          <div class="sum-flows">
-            <div
-              v-for="row in tradeData"
-              :key="row.level"
-              class="sum-flow"
-              :class="row.level.startsWith('买') ? 'bid' : 'ask'"
-            >
-              <span class="sum-flow-name">{{ row.level.replace('新增', '') }}</span>
-              <b class="num">{{ formatVol(row.last_3s) }}</b>
-              <span class="sum-flow-win">/3s</span>
-              <b class="num">{{ formatVol(row.last_1min) }}</b>
-              <span class="sum-flow-win">/1min</span>
-            </div>
-          </div>
-        </div>
       </div>
 
-      <!-- ③ 右侧图表区（仅图表） -->
+      <!-- ③ 右侧图表区：盘口统计表 + Q-t 窗口图 + 锁定订单图 -->
       <div class="ov-chart-area">
+        <SummaryTables :level-data="levelData" :trade-data="tradeData" />
         <TradeFlowChart
           :sym="selectSym"
           :date="selectDate"
@@ -497,6 +469,7 @@
     import TradeFlowChart from './components/TradeFlowChart.vue'
     import LockedOrderChart from './components/LockedOrderChart.vue'
     import TimeStepSelect from './components/TimeStepSelect.vue'
+    import SummaryTables from './components/SummaryTables.vue'
     import { useSnapshotNavigation } from './composables/useSnapshotNavigation';
     import { useMessage } from '/@/hooks/web/useMessage';
     import { createProgressListener } from '/@/utils/websocket';
@@ -1160,13 +1133,6 @@
       if (!a || !b) return '--';
       return ((a - b) / 10000).toFixed(volumeData.value.is_ETF ? 3 : 2);
     });
-
-    // 汇总指标行数字格式化
-    const formatVol = (v) => {
-      if (v === '' || v === null || v === undefined) return '--';
-      const n = Number(v);
-      return Number.isFinite(n) ? n.toLocaleString('zh-CN') : String(v);
-    };
 
     // D1 暗色主题（可选，浅色默认；跨刷新保留偏好）
     const darkMode = ref(localStorage.getItem('ov_theme') === 'dark');
@@ -3516,56 +3482,6 @@
     min-width: 0;
   }
 
-  // ③ 汇总指标行
-  .ov-summary-strip {
-    margin-top: 8px;
-    border: 1px solid #e8eef5;
-    border-radius: 6px;
-    background: #fbfcfe;
-    padding: 6px 10px;
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-  }
-
-  .sum-levels,
-  .sum-flows {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 4px 14px;
-  }
-
-  .sum-level,
-  .sum-flow {
-    display: inline-flex;
-    align-items: baseline;
-    gap: 4px;
-    font-size: 12px;
-    color: #667085;
-
-    b {
-      font-size: 12px;
-      font-weight: 600;
-    }
-  }
-
-  .sum-level.bid b { color: #f5222d; }
-  .sum-level.ask b { color: #52c41a; }
-  .sum-flow.bid b { color: #f5222d; }
-  .sum-flow.ask b { color: #52c41a; }
-
-  .sum-level-name,
-  .sum-flow-name {
-    color: #425466;
-    font-weight: 600;
-  }
-
-  .sum-level-count,
-  .sum-flow-win {
-    color: #98a2b3;
-    font-size: 11px;
-  }
-
   // 窄屏：图表区收到底部
   @media (max-width: 1440px) {
     .ov-body {
@@ -3584,8 +3500,7 @@
     background: #14181f;
 
     .ov-topbar,
-    .chart-card,
-    .ov-summary-strip {
+    .chart-card {
       border-color: #2c3342;
       background: #1b212c;
     }
@@ -3595,9 +3510,7 @@
     }
 
     .chart-card-title,
-    .group-label,
-    .sum-level-name,
-    .sum-flow-name {
+    .group-label {
       color: #aab4c5;
     }
 
