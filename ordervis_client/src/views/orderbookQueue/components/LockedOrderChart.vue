@@ -743,7 +743,7 @@
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
     gap: 6px;
-    max-height: 126px;
+    max-height: 92px;
     overflow-y: auto;
     padding-right: 2px;
   }
@@ -873,14 +873,14 @@
   }
 
   .lock-chart {
-    height: 200px;
+    height: 160px;
     width: 100%;
   }
 
 
   .queue-position-panel {
-    margin-top: 10px;
-    padding-top: 8px;
+    margin-top: 6px;
+    padding-top: 6px;
     border-top: 1px solid #eef2f7;
   }
 

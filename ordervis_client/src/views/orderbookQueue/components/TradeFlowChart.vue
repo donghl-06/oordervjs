@@ -406,7 +406,7 @@
   }
 
   .flow-chart {
-    height: 200px;
+    height: 160px;
     width: 100%;
   }
 </style>

@@ -3269,6 +3269,9 @@
 <style lang="less" scoped>
   // ==================== 第 4 步：新布局样式 ====================
   .ov-page {
+    display: flex;
+    flex-direction: column;
+    height: calc(100vh - 24px);
     margin: 12px;
     padding-bottom: 8px;
     overflow: hidden;
@@ -3420,20 +3423,27 @@
   }
 
   // 主体左右分栏：左数据区 55% / 右图表区 45%
+  // 两栏严格等高（= 视口剩余高度），内容超出时栏内滚动，保证一屏布局不顶天立地
   .ov-body {
     display: flex;
+    flex: 1;
     gap: 8px;
-    align-items: flex-start;
+    align-items: stretch;
+    min-height: 0;
   }
 
   .ov-data-area {
     flex: 0 0 55%;
     min-width: 0;
+    height: 100%;
+    overflow-y: auto;
   }
 
   .ov-chart-area {
     flex: 1;
     min-width: 0;
+    height: 100%;
+    overflow-y: auto;
     display: flex;
     flex-direction: column;
     gap: 8px;
@@ -3443,7 +3453,6 @@
     border: 1px solid #e8eef5;
     border-radius: 6px;
     background: #fbfcfe;
-    min-height: 220px;
     padding: 8px 10px;
   }
 
@@ -3458,7 +3467,7 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    height: 180px;
+    height: 120px;
     color: #98a2b3;
     font-size: 12px;
     border: 1px dashed #d9e2ec;
@@ -3484,8 +3493,12 @@
     min-width: 0;
   }
 
-  // 窄屏：图表区收到底部
+  // 窄屏：图表区收到底部，解除等高约束恢复自然流式高度
   @media (max-width: 1440px) {
+    .ov-page {
+      height: auto;
+    }
+
     .ov-body {
       flex-direction: column;
     }
@@ -3494,6 +3507,8 @@
     .ov-chart-area {
       flex: 1 1 auto;
       width: 100%;
+      height: auto;
+      overflow-y: visible;
     }
   }
 
