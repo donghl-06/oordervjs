@@ -3268,7 +3268,8 @@
 <style lang="less" scoped>
   // ==================== 第 4 步：新布局样式 ====================
   .ov-page {
-    margin: 8px;
+    margin: 12px;
+    padding-bottom: 8px;
     overflow: hidden;
     background: #fff;
 
