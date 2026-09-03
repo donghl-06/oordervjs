@@ -179,7 +179,7 @@
   const chartEl = ref(null);
   const { setOptions, getInstance } = useECharts(chartEl, computed(() => (props.dark ? 'dark' : 'light')));
 
-  // 卡片高度随右栏弹性分配，容器尺寸变化时纠正画布
+  // 卡片高度固定，但窗口/布局变化时仍需纠正画布尺寸
   useResizeObserver(
     chartEl,
     useDebounceFn(() => getInstance()?.resize(), 100),
@@ -884,9 +884,8 @@
   }
 
   .lock-chart {
-    flex: 1;
     width: 100%;
-    min-height: 140px;
+    height: 200px;
   }
 
 
