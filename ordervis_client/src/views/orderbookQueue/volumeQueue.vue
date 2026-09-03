@@ -4288,7 +4288,7 @@
 <style lang="less">
   .score-tip-overlay {
     .ant-tooltip-inner {
-      width: 560px;
+      width: max-content;
       max-width: calc(100vw - 32px);
       box-sizing: border-box;
       padding: 8px 10px;
@@ -4296,7 +4296,7 @@
     }
 
     .score-tip-table {
-      width: 100%;
+      width: auto;
       border-collapse: collapse;
       font-size: 12px;
       font-variant-numeric: tabular-nums;
