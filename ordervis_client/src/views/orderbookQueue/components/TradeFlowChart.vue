@@ -10,11 +10,24 @@
           :options="windowOptions"
           :allow-clear="false"
         />
-        <Checkbox.Group
-          :value="selectedMetrics"
-          :options="metricOptions"
-          @change="handleMetricsChange"
-        />
+        <!-- 8 个纵轴指标按买/卖分两行，每行 4 个：买红卖绿 -->
+        <div class="metric-grid">
+          <div
+            v-for="row in metricRows"
+            :key="row.side"
+            class="metric-row"
+            :class="row.side"
+          >
+            <Checkbox
+              v-for="m in row.metrics"
+              :key="m.key"
+              :checked="selectedMetrics.includes(m.key)"
+              @change="(e) => toggleMetric(m.key, e.target.checked)"
+            >
+              {{ m.label }}
+            </Checkbox>
+          </div>
+        </div>
       </div>
     </div>
     <div v-show="hasData" ref="chartEl" class="flow-chart" />
@@ -75,12 +88,20 @@
     { key: "ask_cancel", label: "卖一撤单", color: "#95de64", plotKey: "ask_cancel_cumulative", instantKey: "ask_cancel", priceKey: "ask_price", priceLabel: "卖一价" },
     { key: "ask_traded", label: "卖一成交", color: "#237804", plotKey: "ask_traded_cumulative", instantKey: "ask_traded", priceKey: "trade_prices", priceLabel: "成交价", tradePrice: true },
   ];
-  const metricOptions = METRIC_DEFS.map((m) => ({ value: m.key, label: m.label }));
+  // 2x4 矩阵：买侧一行（红字）、卖侧一行（绿字）
+  const metricRows = [
+    { side: 'bid', metrics: METRIC_DEFS.filter((m) => m.key.startsWith('bid')) },
+    { side: 'ask', metrics: METRIC_DEFS.filter((m) => m.key.startsWith('ask')) },
+  ];
   const selectedMetrics = ref(['bid_volume', 'ask_volume']);
 
-  // 最多双选叠加：选中第 3 个时丢弃最早选中的
-  const handleMetricsChange = (values) => {
-    const next = values.length > 2 ? values.slice(values.length - 2) : values;
+  // 最多双选叠加：选中第 3 个时丢弃最早选中的；至少保留一个
+  const toggleMetric = (key, checked) => {
+    let next = selectedMetrics.value.filter((item) => item !== key);
+    if (checked) {
+      next.push(key);
+      if (next.length > 2) next = next.slice(next.length - 2);
+    }
     selectedMetrics.value = next.length ? next : ['bid_volume'];
   };
 
@@ -348,19 +369,35 @@
 
   .chart-controls {
     display: flex;
-    align-items: center;
+    align-items: flex-start;
     gap: 8px;
     flex-wrap: wrap;
+  }
 
-    :deep(.ant-checkbox-group) {
-      display: inline-flex;
-      flex-wrap: wrap;
-      gap: 2px 6px;
-    }
+  .metric-grid {
+    display: grid;
+    grid-template-rows: repeat(2, auto);
+    gap: 0 10px;
+    padding: 1px 0;
+  }
+
+  .metric-row {
+    display: grid;
+    grid-template-columns: repeat(4, auto);
+    gap: 0 10px;
+    align-items: center;
 
     :deep(.ant-checkbox-wrapper) {
       font-size: 11px;
       margin-inline-end: 0;
+    }
+
+    &.bid :deep(.ant-checkbox-wrapper) {
+      color: #f5222d;
+    }
+
+    &.ask :deep(.ant-checkbox-wrapper) {
+      color: #52c41a;
     }
   }
 
