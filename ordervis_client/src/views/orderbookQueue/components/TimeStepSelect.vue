@@ -1,6 +1,6 @@
 <template>
   <Tooltip
-    :open="invalid"
+    :visible="invalid"
     title="输入非法：请输入 数字+单位（ms / s / min），如 200ms、5s、1min"
     placement="bottom"
     color="#ff4d4f"
@@ -12,6 +12,7 @@
       :options="autoOptions"
       :placeholder="placeholder"
       :allow-clear="false"
+      :default-active-first-option="false"
       @select="handleCommit"
       @blur="handleBlur"
       @keydown.enter="handleCommit(text)"
@@ -28,6 +29,11 @@
    * 值以毫秒数为唯一口径（v-model:value）。
    * 输入非法时：不跳转、输入内容保持不变，旁边弹出报错提示；
    * 用户重新输入或 3 秒后提示自动消失。
+   *
+   * 注意（antd-vue 3.x）：
+   * - Tooltip 受控属性是 visible（open 是 4.x 才有），用错会导致悬浮即弹出报错；
+   * - AutoComplete 需关闭 default-active-first-option，否则回车会被内部
+   *   拦截选中高亮项（如输入 1huiac 回车却提交 1s），绕过 parseText 校验。
    */
   const props = defineProps({
     value: { type: Number, default: 30 },
