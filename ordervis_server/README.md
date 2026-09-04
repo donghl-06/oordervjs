@@ -1,260 +1,184 @@
-# OrderVis Server - FastAPI 版本
+# OrderVis Server
 
-基于FastAPI的交易数据可视化服务器，专注于TradeBook快照查询和数据管理。
+基于 FastAPI 的高频订单簿可视化后端，负责 TradeBook 数据初始化、盘口快照查询、订单生命周期与成交预测分析。
 
 ## 主要功能
 
-1. **TradeBook管理**: 支持交易账本数据的创建、存储和查询
-2. **快照查询**: 按时间、ID、索引多种方式查询交易快照
-3. **交易日管理**: 获取交易日列表和标的列表
-4. **本地缓存**: 高效的本地缓存存储，支持自动过期清理
-5. **自动数据获取**: 首次访问时自动从aqdatac获取交易数据
-6. **第三方认证**: 支持JWT token验证，无需内置用户管理
-7. **统一响应格式**: 所有API使用统一的 `{code, data, message}` 响应格式
+1. **TradeBook 管理**：交易账本数据的创建、本地缓存和查询（基于 C++ 引擎 `pywangcai_orderbook`，Python 层封装）
+2. **快照查询**：按时间、快照 ID、变化索引多种方式查询盘口快照，支持相邻变化点导航
+3. **流量与队列序列**：Q-t 窗口流量序列（买一/卖一挂单、撤单、成交）、锁定订单身前/身后量采样序列
+4. **订单分析**：订单生命周期（挂出/成交/撤单/存活时间）、真实成交结果与预测成交时间
+5. **异步初始化**：TradeBook 初始化为后台任务，通过 WebSocket / HTTP 双通道汇报进度
+6. **自动数据获取**：首次访问时自动通过 adata 拉取逐笔委托/逐笔成交/分钟K线数据
+7. **认证**：JWT token 验证，并提供与前端 mock 对齐的登录接口
+8. **统一响应格式**：业务 API 使用统一的 `{code, data, message}` 响应格式
 
-## 快速开始
+## 环境要求
 
-### 1. 环境配置
+- Python 3.11
+- C++ 动态库 `lib/pywangcai_orderbook`（仓库自带，不可改动）
+- adata 数据源账号（逐笔数据拉取，需要有效的访问令牌；令牌失效时用环境变量中的账号兜底重新登录）
+
 ```bash
-# 设置aqdatac认证信息
+# adata 登录凭据（令牌失效时兜底使用）
 export aq_username="your-username"
 export aq_password="your-password"
 
-# 设置JWT密钥
+# JWT 密钥
 export JWT_SECRET_KEY="your-secret-key"
 ```
 
-### 2. 安装依赖
+## 安装依赖
+
 ```bash
 pip install -r requirements.txt
 ```
 
-### 3. 启动服务器
-```bash
-# 开发模式
-python main.py
+注意：运行环境需要能同时 `import adata`（数据源 SDK）与 `import lib`（C++ 引擎封装）。若二者不在同一个 Python 环境，需要在启动时把对应的 site-packages 追加进 `sys.path`（见下文"双环境启动"）。
 
-# 生产模式（多进程）
-uvicorn main:app --host 0.0.0.0 --port 18080 --workers 4
+## 启动服务器
+
+代码内部使用包形式导入（`ordervis_server.main:app`），**必须在仓库根目录下启动**，不要在 `ordervis_server/` 目录内直接 `python main.py`。
+
+### 开发模式（仓库根目录）
+
+```bash
+uvicorn ordervis_server.main:app --host 127.0.0.1 --port 18080 --reload
 ```
 
-### 4. 访问API
-- API文档: http://localhost:18080/docs
-- 交易日列表: http://localhost:18080/tradebook/DateList
-- 标的列表: http://localhost:18080/tradebook/symList
+### 生产模式（多进程）
+
+```bash
+uvicorn ordervis_server.main:app --host 0.0.0.0 --port 18080 --workers 4
+```
+
+### 双环境启动（项目 venv + adata 环境分离时）
+
+```bash
+cd ordervis_server
+setsid nohup ../.venv/bin/python -c "
+import sys
+sys.path.insert(0, '<仓库根目录绝对路径>')
+sys.path.append('<adata 环境 site-packages 绝对路径>')
+import uvicorn
+uvicorn.run('ordervis_server.main:app', host='127.0.0.1', port=18080, log_level='info')
+" >> log/server.log 2>&1 &
+```
+
+### 验证
+
+- API 文档: http://127.0.0.1:18080/docs
+- 交易日列表: http://127.0.0.1:18080/basic-api/tradebook/DateList
+- 日志：`ordervis_server/log/server.log`
 
 ## 项目结构
 
 ```
 ordervis_server/
-├── main.py              # FastAPI主服务器
-├── start.py             # 生产模式启动脚本
-├── test.py              # API测试脚本
-├── requirements.txt     # Python依赖
-├── README.md           # 项目说明
-├── run.sh              # Shell启动脚本
-├── lib/                # C++库目录
-├── routers/            # API路由
-│   ├── auth.py         # 认证路由
-│   └── tradebook.py    # TradeBook相关路由
-├── utils/              # 工具函数
-│   ├── auth.py         # 认证模块
-│   ├── tradebook.py    # TradeBook数据类
-│   ├── shared_storage.py # 共享存储管理
-│   └── utils.py        # 数据库工具函数
-├── config/             # 配置文件
-│   └── auth_config.py  # 认证配置
-├── docs/               # 文档
-│   ├── AUTH_SETUP.md   # 认证设置文档
-│   └── TRADEBOOK_STORAGE.md # TradeBook存储文档
-├── package/            # 核心包
-├── log/                # 日志文件
-├── data/               # 数据目录
-├── docker-compose.yml  # Docker配置
-├── Dockerfile          # Docker镜像
-└── .gitignore         # Git忽略文件
+├── main.py               # FastAPI 应用入口（注册中间件与路由）
+├── start.py              # 多 worker 启动脚本
+├── test.py               # API 测试脚本
+├── requirements.txt      # Python 依赖
+├── run.sh                # Shell 启动脚本
+├── lib/                  # C++ 引擎库（pywangcai_orderbook，不可改动）
+├── routers/              # API 路由
+│   ├── auth.py           # 认证与登录
+│   ├── tradebook.py      # TradeBook 业务接口
+│   ├── progress.py       # 初始化进度（HTTP 轮询）
+│   └── websocket.py      # 初始化进度（WebSocket 推送）
+├── utils/                # 工具层
+│   ├── tradebook.py      # TradeBook 数据类
+│   ├── shared_storage.py # 本地缓存管理（12 小时未访问自动清理）
+│   ├── adata_session.py  # adata 会话保活（refresh / 兜底重登）
+│   ├── adata_worker.py   # 数据拉取子进程
+│   ├── adata_converter.py# 数据格式转换
+│   ├── progress_manager.py # 初始化任务进度管理
+│   ├── response.py       # 统一响应格式
+│   └── auth.py           # JWT 认证模块
+├── config/               # 配置（认证参数等）
+├── docs/                 # 补充文档（前端初始化对接示例）
+├── test/                 # 校验脚本（orderid 对齐校验等）
+├── package/              # 日志等基础设施
+├── data/                 # 数据目录（CSV 缓存，不入库）
+└── log/                  # 日志目录
 ```
 
-## 运行服务器
+## API 概览
 
-### 开发模式
-```bash
-python main.py
-```
+业务路由统一挂载在 `/basic-api` 前缀下（直连后端必须带前缀，否则返回"实体或资源不存在"）；WebSocket 不带前缀。
 
-### 生产模式
-```bash
-python start.py
-```
+### 认证（/basic-api）
 
-### 直接使用uvicorn
-```bash
-uvicorn main:app --host 0.0.0.0 --port 18080 --workers 4
-```
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| POST | `/auth/login` | 用户登录 |
+| GET | `/auth/getUserInfo` | 获取用户信息 |
+| GET | `/auth/getPermCode` | 获取权限码 |
+| GET | `/auth/logout` | 用户登出 |
+| GET | `/auth/me` | 获取当前用户信息（需 token） |
+| GET | `/auth/verify` | 验证 token 并返回用户信息 |
+| POST | `/auth/verify-only` | 仅验证 token 有效性 |
 
-## API响应格式
+### TradeBook（/basic-api/tradebook）
 
-所有API接口都使用统一的响应格式：
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| GET | `/DateList` | 交易日列表 |
+| GET | `/symList` | 标的列表（基金仅含场内 ETF/LOF，不含场外 .OF） |
+| POST | `/init_tradebook` | 异步初始化 TradeBook（返回 task_id） |
+| GET | `/progress/{task_id}` | 查询初始化进度（HTTP 轮询通道） |
+| GET | `/snapshots_summary` | 快照摘要（总快照数、时间范围等） |
+| GET | `/snapshot_by_time` | 按时间获取快照（HH:MM:SS.fff） |
+| GET | `/snapshot_by_id` | 按快照 ID 获取 |
+| GET | `/snapshot_by_index` | 按变化索引获取 |
+| GET | `/next_change` | 获取前后相邻的盘口变化快照 |
+| GET | `/trade_flow_series` | Q-t 窗口流量序列（挂单/撤单/成交） |
+| GET | `/order_lifecycle` | 订单生命周期与真实成交摘要 |
+| GET | `/order_execution_estimate` | 预测成交时间与真实成交结果 |
+| GET | `/order_queue_series` | 锁定订单身前/身后量采样序列 |
+| GET | `/pastTimeTradeInfo` | 历史窗口订单统计 |
+| GET | `/find_order` | 按时间/价格/数量/方向查找订单 |
 
-```json
-{
-  "code": 0,           // 0: 成功, 1: 失败
-  "data": {...},       // 响应数据
-  "message": "..."     // 响应消息
-}
-```
+### WebSocket
 
-### 成功响应示例
+| 路径 | 说明 |
+| --- | --- |
+| `/ws/progress/{task_id}` | TradeBook 初始化进度实时推送 |
+
+## 响应格式
+
+业务 API 统一使用：
+
 ```json
 {
   "code": 0,
-  "data": {
-    "symbol": "000001.SZ",
-    "date": "2024-01-15",
-    "total_snapshots": 1000
-  },
-  "message": "获取快照摘要成功"
+  "data": {},
+  "message": "..."
 }
 ```
 
-### 失败响应示例
-```json
-{
-  "code": 1,
-  "data": null,
-  "message": "TradeBook 000001.SZ_2024-01-15 不存在"
-}
-```
+`code` 为 0 表示成功，非 0 表示失败。
 
-## 主要API端点
+## 数据与缓存
 
-### 基础数据接口
-- `GET /tradebook/DateList` - 获取交易日列表
-  - 返回: 日期字符串列表 (YYYY-MM-DD格式)
-- `GET /tradebook/symList` - 获取标的列表
-  - 返回: 可回放标的对象列表（code/type）；基金仅包含有订单簿数据的场内 ETF/LOF，场外 .OF 基金不返回
+- **数据源**：首次访问某标的/日期时自动通过 adata 拉取三类数据——逐笔委托（csord）、逐笔成交（cstra）、分钟K线（cstick），缓存为 `./data/` 下的 CSV：`csord_{symbol}_{date}.csv` 等。
+- **TradeBook 缓存**：每个进程维护独立内存缓存，12 小时未访问自动清理；线程安全。
+- **关键口径**：快照订单的 `order_local_id` 与 CSV 逐笔委托 `orderid` 一一对应（SZ/SH 均 100% 命中）；快照内的 `order_id` 是引擎内部序号，不可用于关联。
 
-### 认证相关
-- `GET /auth/me` - 获取当前用户信息（需要有效token）
-- `GET /auth/verify` - 验证token并返回用户信息
-- `POST /auth/verify-only` - 仅验证token有效性
-
-### TradeBook相关
-- `GET /tradebook/snapshots_summary` - 获取TradeBook快照摘要
-  - 参数: `sym` (交易对), `date` (日期)
-  - 返回: 包含总快照数、总变化数、时间范围等摘要信息
-- `GET /tradebook/snapshot_by_time` - 按时间获取快照
-  - 参数: `sym` (交易对), `date` (日期), `time` (时间，格式: HH:MM:SS.fff)
-  - 返回: 指定时间的快照数据
-- `GET /tradebook/snapshot_by_id` - 按ID获取快照
-  - 参数: `sym` (交易对), `date` (日期), `id` (快照ID)
-  - 返回: 指定ID的快照数据
-- `GET /tradebook/snapshot_by_index` - 按索引获取快照
-  - 参数: `sym` (交易对), `date` (日期), `index` (快照索引)
-  - 返回: 指定索引的快照数据
-- `GET /tradebook/pastTimeTradeInfo` - 获取订单统计信息
-  - 参数: `sym` (交易对), `date` (日期), `time` (时间，格式: HH:MM:SS.fff)
-  - 返回: 统计信息包含过去1min,3s,500ms,50ms,10 ('买一新增撤单', '买一新增挂单', '买一新增成交', '卖一新增撤单', '卖一新增挂单', '卖一新增成交')
-
-## 核心特性
-
-### 统一响应格式
-
-- **一致性**: 所有API接口使用相同的响应结构
-- **错误处理**: 统一的错误码和错误消息格式
-- **前端友好**: 便于前端统一处理API响应
-
-### TradeBook本地缓存存储
-
-系统使用高效的本地缓存来管理TradeBook对象：
-
-- **本地缓存**: 每个进程维护独立的内存缓存，避免序列化问题
-- **自动数据获取**: 首次访问时自动从aqdatac获取csord、cstra、cstick数据
-- **自动过期清理**: 12小时未访问的TradeBook自动清理
-- **线程安全**: 使用线程锁确保并发安全
-- **访问时间追踪**: 自动更新最后访问时间
-
-### 数据获取机制
-
-系统支持自动从aqdatac获取交易数据：
-
-- **csord数据**: 逐笔委托数据
-- **cstra数据**: 逐笔成交数据  
-- **cstick数据**: 分钟K线数据
-
-数据文件存储在`./data/`目录下，格式为：
-- `csord_{symbol}_{date}.csv`
-- `cstra_{symbol}_{date}.csv`
-- `cstick_{symbol}_{date}.csv`
-
-
-## 认证配置
-
-### JWT认证设置
-
-在`config/auth_config.py`中配置认证参数：
-
-```python
-class AuthConfig:
-    SECRET_KEY = "your-secret-key"
-    ALGORITHM = "HS256"
-    VERIFY_EXPIRATION = True
-    # 其他配置...
-```
-
-### 环境变量
-
-可以通过环境变量覆盖配置：
+## 测试与校验
 
 ```bash
-# JWT认证配置
-export JWT_SECRET_KEY="your-secret-key"
-export JWT_ALGORITHM="HS256"
-
-# aqdatac数据源配置
-export aq_username="your-aqdatac-username"
-export aq_password="your-aqdatac-password"
-```
-
-## 测试
-
-运行测试脚本验证API功能：
-
-```bash
+# API 冒烟测试（需服务已启动）
 python test.py
-```
 
-测试脚本会验证：
-- 交易日列表接口
-- 标的列表接口
-- TradeBook快照查询接口
-- 性能测试
-
-## 部署建议
-
-### 开发环境
-```bash
-python main.py  # 单进程，热重载
-```
-
-### 生产环境
-```bash
-python start.py  # 多worker进程
-# 或
-uvicorn main:app --host 0.0.0.0 --port 18080 --workers 4
-```
-
-### Docker部署
-```bash
-docker-compose up -d
+# 订单 ID 对齐校验
+python test/check_alignment.py <symbol> <date>
 ```
 
 ## 注意事项
 
-1. **C++库**: 确保`lib/pywangcai_orderbook`库可正常访问
-2. **数据目录**: 确保`./data/`目录存在且有读写权限
-3. **认证密钥**: 生产环境务必使用安全的JWT密钥
-4. **aqdatac配置**: 确保`aq_username`和`aq_password`环境变量已正确设置
-5. **多进程缓存**: 每个Worker进程维护独立缓存，相同数据可能被重复创建
-6. **数据文件**: 首次访问时会自动下载数据文件，请确保网络连接正常
-7. **响应格式**: 所有API现在使用统一的`{code, data, message}`格式，前端需要相应更新 
+1. **C++ 库不可改动**：`lib/pywangcai_orderbook` 为预编译动态库，后端改动仅限 Python 层。
+2. **工作目录**：必须从仓库根目录以包路径启动（`ordervis_server.main:app`）。
+3. **数据目录**：确保 `./data/` 存在且有读写权限；首次拉取数据需要网络与有效的 adata 凭据。
+4. **多进程缓存**：多 worker 下每个进程独立缓存，相同数据可能被重复初始化。
+5. **JWT 密钥**：生产环境务必使用安全密钥。
